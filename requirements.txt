@@ -1,6 +1,7 @@
 affine==2.4.0
 altair==5.5.0
 anyio @ file:///home/task_175862240045110/conda-bld/anyio_1758622417185/work
+anywidget==0.9.13
 argon2-cffi @ file:///opt/conda/conda-bld/argon2-cffi_1645000214183/work
 argon2-cffi-bindings @ file:///home/task_175792493655564/conda-bld/argon2-cffi-bindings_1757924979391/work
 asttokens @ file:///croot/asttokens_1743630435401/work
@@ -89,9 +90,11 @@ parso==0.8.5
 pexpect @ file:///croot/pexpect_1750072593878/work
 pillow==12.0.0
 platformdirs==4.5.0
+plotly==6.3.1
 prometheus_client @ file:///croot/prometheus_client_1744271615306/work
 prompt_toolkit @ file:///home/task_176037557829432/conda-bld/prompt-toolkit_1760375632635/work
 psutil==7.1.1
+psygnal==0.15.0
 ptyprocess @ file:///tmp/build/80754af9/ptyprocess_1609355006118/work/dist/ptyprocess-0.7.0-py2.py3-none-any.whl
 pure_eval @ file:///home/task_175706703828594/conda-bld/pure_eval_1757067053474/work
 pycparser @ file:///home/task_175749606196006/conda-bld/pycparser_1757496076770/work

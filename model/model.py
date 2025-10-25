@@ -33,7 +33,7 @@ class SewerSystemModel(Model):
 
         self.datacollector = DataCollector(
             model_reporters={
-                "Total Flow": lambda agent: agent.plant.total_flow,
+                "Total Flow": lambda m: m.plant.total_flow,
                 "Overflow Active": lambda m: sum(1 for o in m.overflow_points if o.active),
                 **sensor_flows
             }
@@ -42,7 +42,7 @@ class SewerSystemModel(Model):
     def step(self):
         print(f"\n===== Godzina {self.current_hour} =====")
 
-        self.datacollector.collect(self)
+        # self.datacollector.collect(self)
 
         for sensor in self.sensors:
             sensor.step()
@@ -52,6 +52,7 @@ class SewerSystemModel(Model):
         for overflow in self.overflow_points:
             overflow.step()
 
+        self.datacollector.collect(self)
 
         self.current_hour += 1
         if self.current_hour > self.max_hours:
