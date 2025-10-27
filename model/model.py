@@ -15,8 +15,20 @@ class SewerSystemModel(Model):
         self.max_capacity = max_capacity
         self.max_hours = max_hours
         self.current_hour = 1
-        self.estimated_flow = 0
         self.running = True
+
+        # Dane dot. intensywności opadów
+        #długość min. jak max_hours
+        self.rain_intensity_data = [0, 0, 10, 25, 15, 5, 0]  # Przykładowe natężenie opadu [mm/h]
+        self.rain_depth_data = [0, 0, 10, 35, 50, 55, 55]  # Przykładowa skumulowana suma opadu [mm]
+
+        self.current_rain_intensity = 0
+        self.current_rain_depth = 0
+
+        # === PARAMETRY ZE WZORU ===
+        self.c = 1.2  # Przykładowy współczynnik 'c'
+        self.tau = 3  # Przykładowe 'τ' (akumulacja z 3 ostatnich godzin)
+
 
         self.sensors = [
 
@@ -53,7 +65,7 @@ class SewerSystemModel(Model):
 
         self.datacollector = DataCollector(
             model_reporters={
-                "Estimated Flow": lambda m: m.estimated_flow,
+                "Estimated Flow": lambda m: getattr(m.plant, 'estimated_flow', 0),
                 "Overflow Active": lambda m: int(m.overflow_point.active),
                 **sensor_flows
             }
@@ -68,17 +80,26 @@ class SewerSystemModel(Model):
     def step(self):
         print(f"\n===== Godzina {self.current_hour} =====")
 
-        # self.datacollector.collect(self)
+        # 1. Ustawiane aktualne warunki pogodowe dla tego kroku
+        if 0 < self.current_hour <= len(self.rain_intensity_data):
+            self.current_rain_intensity = self.rain_intensity_data[self.current_hour - 1]
+            self.current_rain_depth = self.rain_depth_data[self.current_hour - 1]
+        else:
+            self.current_rain_intensity = 0
+            self.current_rain_depth = 0  # lub ostatnia znana wartość
 
-        self.estimated_flow = 0
 
+        # 2. Aktywacja sensowrów (liczą wg wzoru 1)
         for sensor in self.sensors:
             sensor.step()
 
+        # 3. Aktywuj oczyszczalnię (obliczy 'estimated_flow' wg formuły 2 i podejmie decyzję)
         self.plant.step()
 
+        # 4. Aktywuj punkt przelewowy (zareaguje na decyzję oczyszczalni)
         self.overflow_point.step()
 
+        # 5. Zbierz dane
         self.datacollector.collect(self)
 
         self.current_hour += 1
