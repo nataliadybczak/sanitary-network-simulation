@@ -1,4 +1,3 @@
-import osmnx as ox
 import contextily as cx
 import matplotlib.pyplot as plt
 
