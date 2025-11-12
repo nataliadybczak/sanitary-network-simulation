@@ -140,38 +140,46 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
 
 # ====== Rysowanie mapy ======
 def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: threading.Lock):
-    pygame.draw.rect(surface, (244,247,252), rect)
-    pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
-    bg_img = pygame.image.load(MAP_IMAGE).convert()
-    img = pygame.transform.smoothscale(bg_img, (MAP_RECT.width, MAP_RECT.height))
-    surface.blit(img, MAP_RECT.topleft)
-
-    font = pygame.font.SysFont(None, 18)
+    if not hasattr(draw_map, "_bg"):
+        draw_map._bg = pygame.image.load(MAP_IMAGE).convert()
+    srf = draw_map._bg
     with lock:
+        s = shared.get("map_scale", 1.0)
+        ox, oy = shared.get("map_offset", (0, 0))
         sensors = shared.get("sensors", [])
         overflow = shared.get("overflow", None)
         plant = shared.get("plant", None)
 
-    # sensory
+    sw, sh = int(rect.width * s), int(rect.height * s)
+    img = pygame.transform.smoothscale(srf, (sw, sh))
+    surface.fill((244, 247, 252), rect)
+    surface.blit(img, (rect.left + ox, rect.top + oy))
+    pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
+
+    font = pygame.font.SysFont(None, 18)
+
+    def apply_view(x, y):
+        x = rect.left + ox + int((x - rect.left) * s)
+        y = rect.top + oy + int((y - rect.top) * s)
+        return x, y
+
     for sid, lat, lon, flow, status in sensors:
-        x, y = geo_to_px(lat, lon, rect)
+        x0, y0 = geo_to_px(lat, lon, rect)
+        x, y = apply_view(x0, y0)
         color = GREEN if status == "NORMAL" else RED
         pygame.draw.circle(surface, color, (x, y), 7)
-        txt = font.render(f"{sid} {flow:.0f} m³/h", True, BLACK)
-        surface.blit(txt, (x+10, y-8))
+        surface.blit(font.render(f"{sid} {flow:.0f} m³/h", True, BLACK), (x + 10, y - 8))
 
-    # przelew
     if overflow:
         oid, lat, lon, active, diverted = overflow
-        x, y = geo_to_px(lat, lon, rect)
+        x0, y0 = geo_to_px(lat, lon, rect)
+        x, y = apply_view(x0, y0)
         pygame.draw.circle(surface, RED if active else GRAY, (x, y), 8)
-        txt = font.render(f"Overflow {oid} {diverted:.0f} m³/h", True, BLACK)
-        surface.blit(txt, (x+10, y-8))
+        surface.blit(font.render(f"Overflow {oid} {diverted:.0f} m³/h", True, BLACK), (x + 10, y - 8))
 
-    # oczyszczalnia
     if plant:
         plat, plon, est = plant
-        x, y = geo_to_px(plat, plon, rect)
-        pygame.draw.rect(surface, BLACK, (x-6, y-6, 12, 12))
-        txt = font.render(f"Sewage Plant {est:.0f} m³/h", True, BLACK)
-        surface.blit(txt, (x+10, y-8))
+        x0, y0 = geo_to_px(plat, plon, rect)
+        x, y = apply_view(x0, y0)
+        pygame.draw.rect(surface, BLACK, (x - 6, y - 6, 12, 12))
+        surface.blit(font.render(f"Sewage Plant {est:.0f} m³/h", True, BLACK), (x + 10, y - 8))
