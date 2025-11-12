@@ -1,6 +1,6 @@
 import pandas as pd
 
-df = pd.read_excel("data_all_values.xlsx")
+df = pd.read_excel("../data_final.xlsx")
 df.columns = df.columns.str.strip()
 
 # Kolumny przepływomierzy
