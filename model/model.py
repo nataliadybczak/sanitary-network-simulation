@@ -14,7 +14,7 @@ def _calculate_distance(loc1, loc2):
 
 # MODEL SYSTEMU KANALIZACYJNEGO
 class SewerSystemModel(Model):
-    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=24):
+    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168):
 
         #graf przepływomierzy
         default_graph = {
@@ -47,6 +47,18 @@ class SewerSystemModel(Model):
             coords = {}
         self.coords = coords
 
+        imp_path = os.path.join("data", "impervious.csv")
+        if os.path.exists(imp_path):
+            df_imp = pd.read_csv(imp_path).set_index("id_sensor")
+        else:
+            df_imp = None
+
+        area_path = os.path.join("data", "areas.csv")
+        if os.path.exists(area_path):
+            df_area = pd.read_csv(area_path).set_index("id_sensor")
+        else:
+            df_area = None
+
         #Wczytujemy średnie przepływy dla każdej godziny dla każdego przepływomierza z pliku srednie_godzinowe.csv
         if mean_flows is None:
             import pandas as pd, os
@@ -75,7 +87,6 @@ class SewerSystemModel(Model):
             print(f"Wczytano średnie godzinowe z {file_path}. Startowa godzina={start_hour}.")
             print(f"Dostępne liczniki: {len(mean_flows)}")
         else:
-            # jeśli przekazano gotowe mean_flows (np. w testach)
             self.hourly_means_df = None
 
         self.mean_flows = mean_flows
@@ -83,19 +94,22 @@ class SewerSystemModel(Model):
         self.graph = graph or default_graph
         self.max_capacity = max_capacity
         self.max_hours = max_hours
+        self.kp26_split_factor = 0.0  # ułamek, jaka część powinna iść na KP26
+        self.nominal_capacity = 1700  # pełne oczyszczanie
+        self.hydraulic_capacity = 2200  # maks. hydrauliczny odbiór
+        self.warning_threshold = 2000  # po tym zaczynamy wykorzystywać przelew KP26
 
         self.current_hour = 1
         self.running = True
 
         # Intensywność deszczu
-        # self.rain_intensity_data = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] * 2
-        # self.rain_intensity_data = [1.0, 1.0] * 12
-        # self.rain_intensity_data = [0.5, 0.5] * 12
-        # self.rain_intensity_data = [2.5, 2.5] * 12
-        self.rain_intensity_data = [12.5, 12.5] * 12
-        self.rain_depth_data = [0] * len(self.rain_intensity_data)
+        file_path = os.path.join("data", "rain.csv")
+        df_rain = pd.read_csv(file_path)
+        self.rain_intensity_data = df_rain["rain_mm_h"].tolist()
+
         self.current_rain_intensity = 0.0
         self.current_rain_depth = 0.0
+        self.rain_memory_lambda = 0.92
 
         # --- PRZEPŁYWOMIERZE ---
         self.sensors = {}
@@ -104,8 +118,6 @@ class SewerSystemModel(Model):
                 continue
 
             mean_flow = mean_flows.get(sensor_id, 50.0)
-            # tutaj będzie trzeba jeszcze dostroić model - dobrać odpowiednie parametry aby działał w sposób jak najbardziej zbliżony do rzeczywistości
-            # będzie też trzeba tworzyć każdego osobno
             if sensor_id in self.coords:
                 lat = self.coords[sensor_id]["lat"]
                 lon = self.coords[sensor_id]["lon"]
@@ -117,12 +129,12 @@ class SewerSystemModel(Model):
                 model=self,
                 location_id=sensor_id,
                 flow_data=None,
-                # location=(49.68 + i*0.001, 19.21 + i*0.001),  # placeholder
                 location=(lat, lon),
+                area=df_area.loc[sensor_id]["area_km2"] if df_area is not None and sensor_id in df_area.index else 3.0,
                 mean_flow=mean_flow,
                 k_sensor=0.8,
-                alpha=1.0,
-                impervious_factor=0.6,
+                alpha=1.2,
+                impervious_factor=df_imp.loc[sensor_id]["impervious"] if df_imp is not None and sensor_id in df_imp.index else 0.5,
                 downstream_ids=downstreams,
                 pipe_loss=0.95
             )
@@ -202,35 +214,53 @@ class SewerSystemModel(Model):
         hour_0_23 = (self.current_hour - 1) % 24
         self.mean_flows = self._select_means_for_hour(hour_0_23)
 
+        # 1) Aktualizacja mean_flow na podstawie pliku srednie_godinowe.csv
         for sid, agent in self.sensors.items():
             if sid in self.mean_flows:
                 agent.mean_flow = float(self.mean_flows[sid])
+
+        # 2) Obliczenie local_mean_flow na podstawie mean_flow dla danej godziny
+        for sid, agent in self.sensors.items():
+            upstream_ids = self.upstreams.get(sid, [])
+            mean_up = sum(
+                self.mean_flows[u] for u in upstream_ids
+                if u in self.mean_flows
+            )
+            agent.local_mean_flow = max(agent.mean_flow - mean_up, 0.0)
 
     # ===============================================
     # Pojedynczy krok symulacji
     # ===============================================
     def step(self):
         print(f"\n===== Godzina {self.current_hour} =====")
-        self.refresh_mean_flows_for_current_hour()
 
-        # --- 1. Ustawiamy warunki pogodowe ---
-        if self.current_hour <= len(self.rain_intensity_data):
-            #pobieramy intensywność opadów w obecnej godzinie
-            self.current_rain_intensity = self.rain_intensity_data[self.current_hour - 1]
-            # RainDepth = suma (wstępnie tak - akumulacja z wysychaniem)
-            if self.current_hour > 1:
-                self.current_rain_depth = 0.9 * self.current_rain_depth + self.current_rain_intensity
-            else:
-                self.current_rain_depth = self.current_rain_intensity
-        else:
-            self.current_rain_intensity = 0.0
-            self.current_rain_depth = 0.0
-
-        # --- 2. Reset buforów ---
+        # --- 1. Reset buforów ---
         for sensor in self.sensors.values():
             sensor.reset_buffers()
         self.plant.reset_buffers()
         self.overflow_point.reset_buffers()
+
+        self.refresh_mean_flows_for_current_hour()
+
+        # --- 2. Ustawiamy warunki pogodowe ---
+        if self.current_hour <= len(self.rain_intensity_data):
+            #pobieramy intensywność opadów w obecnej godzinie
+            self.current_rain_intensity = self.rain_intensity_data[self.current_hour - 1]
+            ''' Rain depth - podejście Kozłowskiego - suma z ostatnich N godzin '''
+            window = 6
+            idx = self.current_hour - 1
+            start = max(0, idx - window + 1)
+            D = sum(self.rain_intensity_data[start: idx + 1])
+            self.current_rain_depth = D
+
+            ''' Alternatywa - w ramach porównania - podejście modelu SWMM - rezerwuar nieliniowy '''
+            # lam = self.rain_memory_lambda #do kalibracji (w literaturze typowo 0.9-0.98)
+            # self.current_rain_depth = (
+            #     self.rain_memory_lambda * self.current_rain_depth + self.current_rain_intensity
+            # )
+        else:
+            self.current_rain_intensity = 0.0
+            self.current_rain_depth = 0.0
 
         # --- 3. Obliczenie przepływów w każdym sensorze (upstream → downstream) ---
         for sid in self.sensor_order:
@@ -241,6 +271,16 @@ class SewerSystemModel(Model):
         # --- 4. Obliczenie stanu oczyszczalni i przelewu ---
         self.plant.step()
         self.overflow_point.step()
+        if self.overflow_point.active:
+            diverted = self.overflow_point.diverted_flow
+            total_in = self.plant.inflow_from_graph
+            remaining = max(0.0, total_in - self.nominal_capacity - diverted)
+
+            print(f"OCZ → podsumowanie:")
+            print(f"  dopływ całkowity: {total_in:.1f}")
+            print(f"  nominal: {self.nominal_capacity}")
+            print(f"  przelew KP26: {diverted:.1f} m3/h")
+            print(f"  nadmiar NIEWYŁADOWANY: {remaining:.1f} m3/h")
 
         # --- 5. Zebranie danych ---
         self.datacollector.collect(self)

@@ -1,6 +1,6 @@
 from model.model import SewerSystemModel
 
-model = SewerSystemModel(max_capacity=1700, max_hours=24)
+model = SewerSystemModel()
 
 while model.running:
     model.step()
