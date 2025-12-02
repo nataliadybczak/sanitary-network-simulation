@@ -103,7 +103,8 @@ class SewerSystemModel(Model):
         self.running = True
 
         # Intensywność deszczu
-        file_path = os.path.join("data", "rain.csv")
+        # file_path = os.path.join("data", "rain.csv") #standardowy plik csv - różne wartości opadów
+        file_path = os.path.join("data/rain_experiments", "realistic.csv") # eksperymenty - nazwa pliku do podmiany
         df_rain = pd.read_csv(file_path)
         self.rain_intensity_data = df_rain["rain_mm_h"].tolist()
 
@@ -277,10 +278,10 @@ class SewerSystemModel(Model):
             remaining = max(0.0, total_in - self.nominal_capacity - diverted)
 
             print(f"OCZ → podsumowanie:")
-            print(f"  dopływ całkowity: {total_in:.1f}")
+            print(f"  dopływ całkowity: {total_in:.2f}")
             print(f"  nominal: {self.nominal_capacity}")
-            print(f"  przelew KP26: {diverted:.1f} m3/h")
-            print(f"  nadmiar NIEWYŁADOWANY: {remaining:.1f} m3/h")
+            print(f"  przelew KP26: {diverted:.2f} m3/h")
+            print(f"  nadmiar NIEWYŁADOWANY: {remaining:.2f} m3/h")
 
         # --- 5. Zebranie danych ---
         self.datacollector.collect(self)

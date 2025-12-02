@@ -94,9 +94,9 @@ class BaseSensorAgent(Agent):
             self.status = "NORMAL"
 
         print(
-            f"[{self.location_id}] Rain_now={rain_I_now:.1f} mm/h, Rain_eff={rain_I:.1f} mm/h, D={D:.1f} mm | "
-            f"Q_base={Q_base:.1f}, Q_rain={Q_rain:.1f}, "
-            f"Q_inflow={self.inflow_from_upstream:.1f} → Q_tot={self.current_flow:.1f}"
+            f"[{self.location_id}] Rain_now={rain_I_now:.2f} mm/h, Rain_eff={rain_I:.2f} mm/h, D={D:.2f} mm | "
+            f"Q_base={Q_base:.2f}, Q_rain={Q_rain:.2f}, "
+            f"Q_inflow={self.inflow_from_upstream:.2f} → Q_tot={self.current_flow:.2f}"
         )
 
     # --- routing po grafie ---
@@ -211,7 +211,7 @@ class SewagePlantAgent(Agent):
 
     def step(self):
         """
-        Logika oparta na 4 progach:
+        Logika oparta na 5 progach:
           - nominal_capacity         – normalna praca
           - warning_threshold        – przeciążenie, ale bez przelewu
           - hydraulic_capacity       – maksymalny ciągły odbiór
@@ -238,7 +238,7 @@ class SewagePlantAgent(Agent):
         # 1) NORMAL – wszystko poniżej nominalnej przepustowości
         if total_in <= nominal:
             self.estimated_flow = total_in
-            print(f"OCZ: OK ({total_in:.1f} m3/h)")
+            print(f"OCZ: OK ({total_in:.2f} m3/h)")
             return
 
         # 2) WARNING – przeciążenie, ale jeszcze bez przelewu (tylko informacja)
@@ -247,7 +247,7 @@ class SewagePlantAgent(Agent):
             overload = total_in - nominal       # ile ponad „komfortową” pracę (tutaj oczyszcalnia jest zmuszona do pracy w trybie przyspieszonym)
             print(
                 f"OCZ: PRZECIĄŻENIE (bez przelewu): "
-                f"in={total_in:.1f}, overload={overload:.1f}"
+                f"in={total_in:.2f}, overload={overload:.2f}"
             )
             return
 
@@ -266,8 +266,8 @@ class SewagePlantAgent(Agent):
             self.model.overflow_point.active = True
 
             print(
-                f"OCZ: KRYTYCZNE ({total_in:.1f} m3/h) – otwieranie KP26, "
-                f"split={frac:.2f}, overload={overload:.1f}"
+                f"OCZ: KRYTYCZNE ({total_in:.2f} m3/h) – otwieranie KP26, "
+                f"split={frac:.2f}, overload={overload:.2f}"
             )
             return
 
@@ -280,7 +280,7 @@ class SewagePlantAgent(Agent):
             self.model.overflow_point.active = True
 
             print(
-                f"OCZ: PRZECIĄŻENIE CHWILOWE ({total_in:.1f} m3/h) – "
+                f"OCZ: PRZECIĄŻENIE CHWILOWE ({total_in:.2f} m3/h) – "
                 f"odbiór max={hydraulic}, reszta do retencji"
             )
             return
@@ -293,6 +293,6 @@ class SewagePlantAgent(Agent):
         self.model.overflow_point.active = True
 
         print(
-            f"OCZ: AWARIA OCZYSZCZALNI! in={total_in:.1f} m3/h > {retention_limit} "
+            f"OCZ: AWARIA OCZYSZCZALNI! in={total_in:.2f} m3/h > {retention_limit} "
             f"→ pełne otwarcie KP26, brak możliwości oczyszcaenia ani zmagazynowania całości ścieków"
         )
