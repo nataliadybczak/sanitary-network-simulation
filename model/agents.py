@@ -3,7 +3,7 @@ from mesa import Agent
 # === PUNKT POMIAROWY (węzeł grafu) ===
 class BaseSensorAgent(Agent):
     def __init__(
-        self, unique_id, model, location_id, flow_data, location,
+        self, unique_id, model, location_id, flow_data, location, area,
         mean_flow, k_sensor=0.5, alpha=1.0, impervious_factor=0.5,
         downstream_ids=None,      # lista sąsiadów w dół rzeki
         split=None,               # dict: {target_id: udział [0..1]}  sum=1
@@ -12,6 +12,7 @@ class BaseSensorAgent(Agent):
         self.unique_id = unique_id #unikalny numer agenta w modelu mesa
         self.model = model
         self.location_id = location_id # nazwa przepływomierza (np. KP1)
+        self.area = area or 3.0
 
         # dane i stan
         self.base_flow_data = flow_data or [] #ewentualnie do testowania na danych rzeczywistych
@@ -22,6 +23,9 @@ class BaseSensorAgent(Agent):
         self.k_sensor = k_sensor #współczynnik wpływu deszczu
         self.alpha = alpha # wykładnik nieliniowości
         self.impervious_factor = impervious_factor # udział powierzchni nieprzepuszczalnych
+        self.local_mean_flow = 0.0 # średni przepływ bez uwzględniania dopływów
+        self.storage = 0.0
+        self.rain_buffer = [0.0]
 
         # graf
         self.downstream_ids = downstream_ids or [] # sąsiedzi
@@ -54,43 +58,46 @@ class BaseSensorAgent(Agent):
     # --- hydrologia lokalna ---
     def step(self):
         """
-        1) wylicz lokalny przepływ wg wzoru:
-           Flow_local = BaseFlow(t) - mean(BaseFlow of inflows) + k * RainIntensity(t)^alpha * ImperviousFactor
-        2) dodaj dopływ z upstream: current_flow = local + inflow_from_upstream
-        3) oceń status (alert gdy >> normal)
+            Hydrologia lokalna:
+               Q_total = Q_base(mean_flow, D) + Q_rain(i) + inflow_from_upstream
         """
-        rain_I = self.model.current_rain_intensity
-        rain_component = self.k_sensor * (rain_I ** self.alpha) * self.impervious_factor
+        # --- 1. Pobranie danych o opadach ---
+        # rain_I = self.model.current_rain_intensity # intensywność i(t)
+        # D = self.model.current_rain_depth # skumulowana głębokość opadu
+        rain_I_now = self.model.current_rain_intensity  # i(t)
+        D = self.model.current_rain_depth  # D(t) – zostawiamy bez laga
 
-        # --- dopływy do tego węzła (korzystamy z mapy przygotowanej w modelu) ---
-        upstream_ids = self.model.upstreams.get(self.location_id, [])
-        upstream_sensors = [self.model.sensors[u] for u in upstream_ids if u in self.model.sensors]
+        # bufor 1-godzinny dla spływu powierzchniowego
+        self.rain_buffer.append(rain_I_now)
+        rain_I = self.rain_buffer.pop(0)  # i(t-1) – używane w Q_rain
 
-        if upstream_sensors:
-            sum_mean_inflows = sum(s.mean_flow for s in upstream_sensors)
-            sum_actual_inflows = sum(s.current_flow for s in upstream_sensors)
-            sum_delta = sum_actual_inflows - sum_mean_inflows
+        # --- 2. Suchy przepływ + infiltracja ---
+        # Q_base = Q_dry + gamma * D
+        gamma = 0.015 #ewentualnie możemy jeszcze dokalibrować
+        self.storage = 0.9 * self.storage + D
+        Q_base = self.local_mean_flow + gamma * self.storage
 
-            self.local_flow = max(0.0, self.mean_flow + sum_delta + rain_component)
-        else:
-            self.local_flow = self.mean_flow + rain_component
+        # --- 3. Natychmiastowy spływ deszczowy (Rational/SWMM hybrid) ---
+        # Q_rain = k * i^alpha * f_imp * area
+        Q_rain = self.k_sensor * (rain_I ** self.alpha) * self.impervious_factor * self.area
 
-        self.current_flow = self.local_flow
+        # --- 4. Lokalny przepływ ---
+        self.local_flow = max(0.0, Q_base + Q_rain)
 
+        # --- 5. Rzeczywisty przepływ (z uwzględnieniem dopływów)
+        self.current_flow = self.local_flow + self.inflow_from_upstream
+
+        # --- 6. Status (możemy wysyłać ostzreżenie, gdy poziom przepływu będzie znacznie wyższy niż przeciętny) ---
         if self.current_flow > 1.5 * self.mean_flow:
             self.status = "ALERT"
         else:
             self.status = "NORMAL"
 
-        if upstream_sensors:
-            print(f"[{self.location_id}] Rain={rain_I:.1f} | Σmean_in={sum_mean_inflows:.1f} | "
-                  f"Σactual_in={sum_actual_inflows:.1f} | Δ={sum_actual_inflows - sum_mean_inflows:.1f} | "
-                  f"Rain={rain_I:.1f} mm/h (+{rain_component:.2f}) | "
-                  f"Local={self.mean_flow:.1f} | Total={self.current_flow:.1f}")
-        else:
-            print(f"[{self.location_id}] Rain={rain_I:.1f} | no inflows | "
-                  f"Rain={rain_I:.1f} mm/h (+{rain_component:.2f}) | "
-                  f"Local={self.mean_flow:.1f} | Total={self.current_flow:.1f}")
+        print(
+            f"[{self.location_id}] Rain_now={rain_I_now:.2f} mm/h, Rain_eff={rain_I:.2f} mm/h, D={D:.2f} mm | "
+            f"Q_base={Q_base:.2f}, Q_rain={Q_rain:.2f}, "
+            f"Q_inflow={self.inflow_from_upstream:.2f} → Q_tot={self.current_flow:.2f}"
+        )
 
     # --- routing po grafie ---
     def route(self):
@@ -108,12 +115,15 @@ class BaseSensorAgent(Agent):
 
         # Specjalna logika TYLKO dla KP16 i KP25 (bo tylko one mogą iść do KP26):
         if self.location_id in ("KP16", "KP25") and "KP26" in self.downstream_ids and "KP2" in self.downstream_ids:
-            if not self.model.overflow_point.active:
-                # brak przeciążenia → wszystko do KP2
+            # korzystamy z info z poprzedniej godziny:
+            f_kp26 = getattr(self.model, "kp26_split_factor", 0.0)
+
+            if not self.model.overflow_point.active or f_kp26 <= 0.0:
+                # brak przeciążenia w poprzedniej godzinie → wszystko do KP2
                 split = {"KP2": 1.0, "KP26": 0.0}
             else:
-                # przeciążenie (wstępnie pół na pół, w wersji finalnej będziemy wyliczać odpowiednią ilość)
-                split = {"KP2": 0.5, "KP26": 0.5}
+                # część przepływu kierujemy na KP26, resztę do KP2
+                split = {"KP2": 1.0 - f_kp26, "KP26": f_kp26}
         else:
             # reszta węzłów: jeżeli mają jednego następcę, to wszystko do niego
             if len(self.downstream_ids) == 1:
@@ -146,14 +156,14 @@ class OverflowPointAgent(Agent):
         self.location_id = location_id
         self.location = location
 
-        self.capacity = capacity #wstępnie zakłądamy nieograniczoną - wlew do rzeki (w praktyce ze względu na środowisko powinien zostać określony ścisły limit)
+        self.capacity = capacity #wstępnie zakładamy nieograniczoną - wlew do rzeki (w praktyce ze względu na środowisko powinien zostać określony ścisły limit)
         self.inflow_from_graph = 0.0  # dopływ w tej godzinie
         self.active = False
         self.diverted_flow = 0.0      # ile realnie popłynęło do rzeki
 
     def reset_buffers(self):
         self.inflow_from_graph = 0.0
-        self.active = False
+        # self.active = False
         self.diverted_flow = 0.0
 
     def receive(self, flow_value: float):
@@ -161,12 +171,16 @@ class OverflowPointAgent(Agent):
             self.inflow_from_graph += flow_value
 
     def step(self):
-        # tu ewentualnie logika ograniczeń przelewu, na razie wszystko co dopływa = odprowadzone
+        # KP26 ma NIE działać jeśli oczyszczalnia nie zezwoliła:
+        if not self.active:
+            self.diverted_flow = 0.0
+            return
+
         overflow = min(self.inflow_from_graph, self.capacity)
         self.diverted_flow = overflow
-        self.active = self.diverted_flow > 0.0
-        if self.active:
-            print(f"Punkt przelewowy {self.location_id} otwarty → do rzeki {self.diverted_flow:.2f} m³/h")
+
+        if overflow > 0:
+            print(f"Punkt przelewowy {self.location_id} otwarty → do rzeki {overflow:.2f} m³/h")
 
 
 # === OCZYSZCZALNIA ===
@@ -196,13 +210,89 @@ class SewagePlantAgent(Agent):
             self.inflow_from_graph += flow_value
 
     def step(self):
-        # Dopływ do oczyszczalni pochodzi z grafu (sumowany przez sensory .route())
-        rain_depth = getattr(self.model, "current_rain_depth", 0.0)
-        self.estimated_flow = self.inflow_from_graph + self.k_rain_depth * rain_depth
+        """
+        Logika oparta na 5 progach:
+          - nominal_capacity         – normalna praca
+          - warning_threshold        – przeciążenie, ale bez przelewu
+          - hydraulic_capacity       – maksymalny ciągły odbiór
+          - hydraulic_capacity+1000  – chwilowe przeciążenie możliwe do zmagazynowania
+          - > hydraulic_capacity+1000 – awaria układu
 
-        if self.estimated_flow <= self.max_capacity:
-            print(f"OCZ: OK. Dopływ={self.estimated_flow:.2f} m³/h (limit {self.max_capacity})")
-            self.model.overflow_point.active = False
-        else:
-            overload = self.estimated_flow - self.max_capacity
-            print(f"OCZ: PRZEKROCZENIE LIMITU! Dopływ={self.estimated_flow:.2f} m³/h (>{self.max_capacity}) → nadmiar {overload:.2f} m³/h")
+        Sterowanie KP26 odbywa się przez:
+          - self.model.kp26_split_factor   (jaką część przepływu KP16/KP25 można wysłać na KP26)
+          - self.model.overflow_point.active (czy w ogóle wolno kierować na przelew)
+        """
+        rain_depth = getattr(self.model, "current_rain_depth", 0.0)
+        total_in = self.inflow_from_graph + self.k_rain_depth * rain_depth
+
+        # Progi z modelu
+        nominal = getattr(self.model, "nominal_capacity", self.max_capacity)
+        warning = getattr(self.model, "warning_threshold", nominal)
+        hydraulic = getattr(self.model, "hydraulic_capacity", warning)
+        retention_limit = hydraulic + 1000
+
+        # Domyślnie na początku każdej godziny brak odciążania na KP26
+        self.model.kp26_split_factor = 0.0
+        self.model.overflow_point.active = False
+
+        # 1) NORMAL – wszystko poniżej nominalnej przepustowości
+        if total_in <= nominal:
+            self.estimated_flow = total_in
+            print(f"OCZ: OK ({total_in:.2f} m3/h)")
+            return
+
+        # 2) WARNING – przeciążenie, ale jeszcze bez przelewu (tylko informacja)
+        if total_in <= warning:
+            self.estimated_flow = total_in
+            overload = total_in - nominal       # ile ponad „komfortową” pracę (tutaj oczyszcalnia jest zmuszona do pracy w trybie przyspieszonym)
+            print(
+                f"OCZ: PRZECIĄŻENIE (bez przelewu): "
+                f"in={total_in:.2f}, overload={overload:.2f}"
+            )
+            return
+
+        # 3) CRITICAL – zaczynamy otwierać KP26 stopniowo
+        if total_in <= hydraulic:
+            self.estimated_flow = total_in
+            overload = total_in - nominal
+
+            if hydraulic > warning:
+                frac = (total_in - warning) / (hydraulic - warning)
+            else:
+                frac = 1.0
+            frac = max(0.0, min(frac, 1.0))
+
+            self.model.kp26_split_factor = frac
+            self.model.overflow_point.active = True
+
+            print(
+                f"OCZ: KRYTYCZNE ({total_in:.2f} m3/h) – otwieranie KP26, "
+                f"split={frac:.2f}, overload={overload:.2f}"
+            )
+            return
+
+        # 4) FAILURE_SOFT – powyżej hydraulicznego, ale w granicach retencji
+        if total_in <= retention_limit:
+            self.estimated_flow = hydraulic
+            overload = total_in - nominal
+
+            self.model.kp26_split_factor = 1.0
+            self.model.overflow_point.active = True
+
+            print(
+                f"OCZ: PRZECIĄŻENIE CHWILOWE ({total_in:.2f} m3/h) – "
+                f"odbiór max={hydraulic}, reszta do retencji"
+            )
+            return
+
+        # 5) FAILURE_HARD – powyżej retencji – awaria
+        self.estimated_flow = hydraulic
+        overload = total_in - nominal
+
+        self.model.kp26_split_factor = 1.0
+        self.model.overflow_point.active = True
+
+        print(
+            f"OCZ: AWARIA OCZYSZCZALNI! in={total_in:.2f} m3/h > {retention_limit} "
+            f"→ pełne otwarcie KP26, brak możliwości oczyszcaenia ani zmagazynowania całości ścieków"
+        )
