@@ -5,30 +5,75 @@ from typing import Dict, Optional, Tuple, List
 import os
 import math
 import warnings
+import csv
 
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 import pygame
+
+from visualisation.map_download import get_map
+
+# Definicje ścieżek
+BOUNDS_PATH = os.path.join("data", "map_bounds.csv")
+MAP_IMAGE = "visualisation/map.png"
+
+
+def get_dynamic_map_bounds():
+    # 1. Sprawdź czy pliki istnieją
+    if not os.path.exists(BOUNDS_PATH) or not os.path.exists(MAP_IMAGE):
+        print(f"[INFO] Brak plików mapy ({MAP_IMAGE}) lub granic ({BOUNDS_PATH}).")
+        print("[INFO] Uruchamiam automatyczne generowanie mapy...")
+        try:
+            get_map()
+        except Exception as e:
+            print(f"[ERROR] Błąd podczas generowania mapy: {e}")
+            # Zwracamy domyślne (fallback) jeśli generowanie się nie uda
+            return (49.62049, 49.71757, 19.40470, 19.10064)
+
+    # 2. Odczytaj wartości z pliku
+    try:
+        with open(BOUNDS_PATH, mode='r') as f:
+            reader = csv.reader(f)
+            header = next(reader)  # Pomiń nagłówek
+            row = next(reader)
+
+            # W map_download.py zapisywaliśmy: [south, north, west, east]
+            south = float(row[0])
+            north = float(row[1])
+            west = float(row[2])  # min_lon
+            east = float(row[3])  # max_lon
+
+            # Twoja zmienna MAP_BOUNDS w poprzednim pytaniu miała format:
+            # (south, north, east, west) <- zwróć uwagę na kolejność East/West
+            # więc zwracamy je w takiej kolejności:
+            print(f"[INFO] Wczytano granice mapy: S={south}, N={north}, E={east}, W={west}")
+            return (south, north, east, west)
+
+    except Exception as e:
+        print(f"[ERROR] Błąd odczytu pliku CSV: {e}. Używam wartości domyślnych.")
+        return (49.62049, 49.71757, 19.40470, 19.10064)
+
+# === Konfiguracja mapy ===
+# # MAP_BOUNDS = (49.6600, 49.7150, 19.2600, 19.1700)
+# MAP_BOUNDS = (49.62049, 49.71757, 19.40470, 19.10064)
+MAP_BOUNDS = get_dynamic_map_bounds()
+
 
 # ====== Konfiguracja UI ======
 WINDOW_W, WINDOW_H = 1280, 720
 FPS = 60
 CHART_MAX_POINTS = 600
 
-# Zakres geograficzny mapy
-MAP_BOUNDS = (49.6600, 49.7150, 19.2600, 19.1700)
-MAP_IMAGE = "visualisation/map.png"
-
 # Kolory
-WHITE = (255, 255, 255);
-BLACK = (25, 25, 25);
-GRAY = (140, 140, 140);
+WHITE = (255, 255, 255)
+BLACK = (25, 25, 25)
+GRAY = (140, 140, 140)
 LIGHT = (236, 240, 245)
-RED = (226, 78, 78);
-GREEN = (52, 199, 121);
-ORANGE = (245, 165, 60);
+RED = (226, 78, 78)
+GREEN = (52, 199, 121)
+ORANGE = (245, 165, 60)
 BLUE = (66, 133, 244)
-DARK_RED = (150, 20, 20);
+DARK_RED = (150, 20, 20)
 YELLOW = (240, 230, 50)
 BROWN = (139, 69, 19)
 
