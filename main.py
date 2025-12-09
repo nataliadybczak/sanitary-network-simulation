@@ -1,6 +1,6 @@
 from model.model import SewerSystemModel
 
-model = SewerSystemModel()
+model = SewerSystemModel(rain_file="data/rain.csv")
 
 while model.running:
     model.step()
