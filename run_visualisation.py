@@ -1,12 +1,15 @@
-from visualisation.graphics_functions import *   # draw_map, draw_chart, kolory, stałe
+from visualisation.graphics_functions import *
 from model.model import SewerSystemModel
 from visualisation.simulation_engine import SimulationThread
+
+import os
+import warnings
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
+warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 
 import pygame
 from collections import deque
 import multiprocessing as mp
-
-import os
 
 def place_window(x: int, y: int):
     os.environ["SDL_VIDEO_WINDOW_POS"] = f"{x},{y}"
@@ -69,12 +72,11 @@ def map_window_loop(shared, lock, pause_evt, stop_evt, pos=(0, 50)):
                             shared["map_offset"] = (ox, oy)
 
         screen.fill((252, 253, 255))
-        # rysuj mape
         draw_map(screen, MAP_ONLY_RECT, shared, lock)
 
         with lock:
             still_running = shared.get("running", True); hour = shared.get("hour", 0)
-        info = f"[MAP] hour={hour} | running={still_running} | [SPACE]=pauza/wznów  | zamknij okno krzyżykiem (QUIT)"
+        info = f"[MAP] hour={hour} | running={still_running} | [SPACE]=pauza/wznów"
         txt = font.render(info, True, BLACK)
         screen.blit(txt, (12, WIN_H - 28))
 
@@ -88,7 +90,7 @@ def map_window_loop(shared, lock, pause_evt, stop_evt, pos=(0, 50)):
 def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
     place_window(*pos)
     pygame.init()
-    pygame.display.set_caption("SewerSystem — CHART")
+    pygame.display.set_caption("SewerSystem — CHART & RAIN")
     WIN_W, WIN_H = 900, 650
     CHART_ONLY_RECT = pygame.Rect(12, 12, WIN_W - 24, WIN_H - 24)
 
@@ -97,40 +99,38 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
     font = pygame.font.SysFont(None, 20)
 
     points_est, points_div = deque(maxlen=CHART_MAX_POINTS), deque(maxlen=CHART_MAX_POINTS)
+    points_rain = deque(maxlen=CHART_MAX_POINTS) # Nowa seria dla deszczu
 
     running = True
     while running and not stop_evt.is_set():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    if pause_evt.is_set():
-                        pause_evt.clear()
-                        print("[CHART] Wznawiam symulację")
-                    else:
-                        pause_evt.set()
-                        print("[CHART] Pauzuję symulację")
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                 if pause_evt.is_set(): pause_evt.clear()
+                 else: pause_evt.set()
 
         screen.fill((252, 253, 255))
 
-        # nowy punkt do wykresu
         with lock:
             pt = shared.get("point")
             max_capacity = shared.get("max_capacity")
+            rain_data = shared.get("rain", {"depth": 0.0})
             still_running = shared.get("running", True)
             hour = shared.get("hour", 0)
 
         if pt is not None:
             ts, est, div = pt
+            # Dodajemy punkt tylko jeśli jest nowy (sprawdzamy po timestampie lub wartości, tu uproszczenie)
             if not points_est or points_est[-1][0] != ts:
                 points_est.append((ts, est))
                 points_div.append((ts, div))
+                points_rain.append((ts, rain_data.get("depth", 0.0)))
 
-        # rysuj wykres na całe okno
-        draw_chart(screen, CHART_ONLY_RECT, points_est, points_div, max_capacity)
+        # Rysowanie wykresu (przekazujemy też deszcz)
+        draw_chart(screen, CHART_ONLY_RECT, points_est, points_div, points_rain, max_capacity)
 
-        status = f"[CHART] hour={hour} | running={still_running} | [SPACE]=pauza/wznów  | zamknij okno krzyżykiem (QUIT)"
+        status = f"[CHART] hour={hour} | running={still_running}"
         txt = font.render(status, True, BLACK)
         screen.blit(txt, (12, WIN_H - 28))
 
@@ -140,7 +140,7 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
     pygame.quit()
 
 
-# ====== Uruchomienie symulacji + 2 okna ======
+# ====== Uruchomienie ======
 def run_two_windows_dashboard(model_instance: SewerSystemModel, interval_sec: float = 0.5):
     mp.set_start_method("spawn", force=True)
 
@@ -150,6 +150,9 @@ def run_two_windows_dashboard(model_instance: SewerSystemModel, interval_sec: fl
         "overflow": None,
         "plant": None,
         "point": None,
+        "plant_params": {}, # Init
+        "rain": {"intensity": 0.0, "depth": 0.0}, # Init
+        "connections": [], # Init
         "max_capacity": getattr(model_instance, "max_capacity", None),
         "running": True,
         "hour": 0,
@@ -158,11 +161,9 @@ def run_two_windows_dashboard(model_instance: SewerSystemModel, interval_sec: fl
     stop_evt = manager.Event()
     pause_evt = manager.Event()
 
-    # wątek symulacji
     sim_thread = SimulationThread(model_instance, interval_sec, shared, lock, stop_evt, pause_evt)
     sim_thread.start()
 
-    # procesy dla okien
     map_pos = (0, 50)
     chart_pos = (50 + 900 + 30, 50)
     p_map = mp.Process(target=map_window_loop,   args=(shared, lock, pause_evt, stop_evt, map_pos), daemon=True)
@@ -180,10 +181,8 @@ def run_two_windows_dashboard(model_instance: SewerSystemModel, interval_sec: fl
         stop_evt.set()
         sim_thread.join(timeout=2.0)
 
-
-# ====== Uruchomienie ======
 if __name__ == "__main__":
-    print("Tworzę instancję modelu SewerSystemModel")
-    model = SewerSystemModel(max_capacity=2000, max_hours=7)
-
+    model = SewerSystemModel()
+    print("\n=== Symulacja rozpoczęta ===")
     run_two_windows_dashboard(model, interval_sec=1.0)
+    print("\n=== Symulacja zakończona ===")
