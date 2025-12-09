@@ -1,0 +1,8 @@
+Średni przepływ przy braku opadów: 1136.81 m³/h
+Maksymalny przepływ przy braku opadów: 2120.68 m³/h
+Średni przepływ podczas opadów poniżej 0.5 mm: 1168.51 m³/h
+Maksymalny przepływ podczas opadów poniżej 0.5 mm: 1667.34 m³/h
+Średni przepływ podczas opadów od 0.5 mm: 1331.91 m³/h
+Maksymalny przepływ podczas opadów od 0.5 mm: 1871.42 m³/h
+Średni przepływ podczas opadów od 1.0 mm: 1510.53 m³/h
+Maksymalny przepływ podczas opadów od 1.0 mm: 1820.46 m³/h
