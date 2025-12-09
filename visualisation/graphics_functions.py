@@ -65,9 +65,6 @@ def get_dynamic_map_bounds():
 
 # === Konfiguracja mapy ===
 MAP_BOUNDS = get_dynamic_map_bounds()
-# # MAP_BOUNDS = (49.6600, 49.7150, 19.2600, 19.1700)
-# MAP_BOUNDS = (49.62049, 49.71757, 19.40470, 19.10064)
-
 
 # ====== Konfiguracja UI ======
 WINDOW_W, WINDOW_H = 1280, 720
@@ -168,7 +165,6 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
         max_r = max(1.0, max(rain_vals) * 2)  # skala deszczu
 
         for i, (_, val) in enumerate(points_rain):
-            # POPRAWKA: Zabezpieczenie przed dzieleniem przez zero gdy n=1
             if n > 1:
                 x = plot.left + int(i * (plot.width - 1) / (n - 1))
             else:
@@ -226,6 +222,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         connections = shared.get("connections", [])
         rain = shared.get("rain", {})
         plant_params = shared.get("plant_params", {})
+        extra_points = shared.get("extra_points", [])
 
     sw, sh = int(rect.width * s), int(rect.height * s)
     img = pygame.transform.smoothscale(srf, (sw, sh))
@@ -245,20 +242,29 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     for (start_loc, end_loc, flow) in connections:
         sx, sy = apply_view(*start_loc)
         ex, ey = apply_view(*end_loc)
-        # Kolor połączenia: niebieski jeśli płynie, szary jeśli sucho
         col = (50, 50, 200) if flow > 1.0 else (180, 180, 180)
         thick = 2 if flow > 1.0 else 1
         draw_arrow(surface, (sx, sy), (ex, ey), col, thick)
 
     font = pygame.font.SysFont(None, 16)
+    font_small = pygame.font.SysFont(None, 14)
+
+    # 1.5. Extra points (nieaktywne)
+    for pid, lat, lon in extra_points:
+        x, y = apply_view(lat, lon)
+        pygame.draw.circle(surface, (180, 180, 180), (x, y), 5)
+        # Nazwa punktu
+        lbl = font_small.render(str(pid), True, (100, 100, 100))
+        surface.blit(lbl, (x + 6, y - 6))
 
     # 2. Sensory (Kółka)
+    SENSOR_RADIUS = 7
     for sid, lat, lon, flow, status in sensors:
         x, y = apply_view(lat, lon)
         color = GREEN if status == "NORMAL" else RED
-        draw_shape_fn = pygame.draw.circle
-        draw_shape_fn(surface, color, (x, y), 7)
-        pygame.draw.circle(surface, BLACK, (x, y), 7, 1)  # obrys
+
+        # Tylko kółko w kolorze statusu
+        pygame.draw.circle(surface, color, (x, y), SENSOR_RADIUS)
 
         # Etykieta
         lbl = font.render(f"{sid}", True, BLACK)
@@ -271,13 +277,11 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         oid, lat, lon, active, diverted = overflow
         x, y = apply_view(lat, lon)
 
-        # Plama przelewu
         if diverted > 0:
             draw_blob(surface, x, y, 40, BLUE, alpha=80)
 
         col = ORANGE if active else GRAY
         draw_triangle(surface, x, y, 9, col)
-        pygame.draw.polygon(surface, BLACK, [(x, y - 9), (x - 9, y + 9), (x + 9, y + 9)], 1)  # obrys
 
         lbl = font.render(f"KP26: {diverted:.0f}", True, BLACK)
         surface.blit(lbl, (x + 12, y - 5))
@@ -287,66 +291,132 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         plat, plon, est = plant
         x, y = apply_view(plat, plon)
 
-        # Logika kolorów oczyszczalni
         nom = plant_params.get("nominal", 1700)
         warn = plant_params.get("warning", 2000)
         hyd = plant_params.get("hydraulic", 2200)
 
         p_col = GREEN
         if est > hyd + 1000:
-            p_col = DARK_RED  # Awaria twarda
+            p_col = DARK_RED
         elif est > hyd:
-            p_col = RED  # Przeciążenie hydrauliczne (retencja)
+            p_col = RED
         elif est > warn:
-            p_col = ORANGE  # Krytyczne
+            p_col = ORANGE
         elif est > nom:
-            p_col = YELLOW  # Ostrzeżenie
+            p_col = YELLOW
 
-        # Plama awarii
         if est > hyd:
             draw_blob(surface, x, y, 50, BROWN, alpha=100)
 
-        draw_square(surface, x, y, 10, p_col)
-        pygame.draw.rect(surface, BLACK, (x - 10, y - 10, 20, 20), 1)
+        # IKONA OCZYSZCZALNI
+        PLANT_RADIUS = 12
+        # 1. Białe tło
+        pygame.draw.circle(surface, WHITE, (x, y), PLANT_RADIUS)
+        # 2. Zewnętrzny pierścień
+        pygame.draw.circle(surface, p_col, (x, y), PLANT_RADIUS, 3)
+        # 3. Wewnętrzne kółko
+        pygame.draw.circle(surface, p_col, (x, y), PLANT_RADIUS - 5)
 
-        # Pasek napełnienia przy oczyszczalni
-        bar_h = 40;
-        bar_w = 6
+        # PASEK POSTĘPU PO PRAWEJ
+        bar_h = 36
+        bar_w = 8
         fill_pct = min(1.0, est / (hyd * 1.2))
-        bx, by = x + 15, y - 10
+
+        bx = x + PLANT_RADIUS + 6
+        by = y - (bar_h // 2)
+
         pygame.draw.rect(surface, WHITE, (bx, by, bar_w, bar_h))
         pygame.draw.rect(surface, BLACK, (bx, by, bar_w, bar_h), 1)
         fill_h = int(fill_pct * bar_h)
         pygame.draw.rect(surface, p_col, (bx + 1, by + bar_h - fill_h, bar_w - 2, fill_h))
 
-        surface.blit(font.render(f"OCZ: {est:.0f}", True, BLACK), (x - 20, y + 14))
+        # Etykieta pod ikoną
+        lbl_ocz = font.render(f"OCZ: {est:.0f}", True, BLACK)
+        lbl_x = x - (lbl_ocz.get_width() // 2)
+        lbl_y = y + PLANT_RADIUS + 4
+        surface.blit(lbl_ocz, (lbl_x, lbl_y))
 
-    surface.set_clip(None)  # Koniec clipowania mapy
+    surface.set_clip(None)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
-    # 5. Panel informacyjny (HUD) na mapie
-    # Panel deszczu
-    hud_x, hud_y = rect.right - 130, rect.top + 20
-    pygame.draw.rect(surface, (255, 255, 255, 200), (hud_x, hud_y, 110, 100), border_radius=8)
-    pygame.draw.rect(surface, GRAY, (hud_x, hud_y, 110, 100), 1, border_radius=8)
+    # 5. Panel informacyjny (HUD) na mapie - DESZCZ (ZMODYFIKOWANY)
+
+    hud_w, hud_h = 160, 110
+    hud_x, hud_y = rect.right - hud_w - 20, rect.top + 20
+
+    # Tło panelu
+    pygame.draw.rect(surface, (255, 255, 255, 230), (hud_x, hud_y, hud_w, hud_h), border_radius=8)
+    pygame.draw.rect(surface, GRAY, (hud_x, hud_y, hud_w, hud_h), 1, border_radius=8)
 
     r_int = rain.get("intensity", 0.0)
     r_dep = rain.get("depth", 0.0)
 
-    title_f = pygame.font.SysFont(None, 18, bold=True)
+    # --- TEXT (Lewa strona) ---
+    title_f = pygame.font.SysFont(None, 20, bold=True)
     val_f = pygame.font.SysFont(None, 18)
 
-    surface.blit(title_f.render("DESZCZ", True, BLACK), (hud_x + 30, hud_y + 5))
-    surface.blit(val_f.render(f"Int: {r_int:.1f} mm/h", True, BLACK), (hud_x + 10, hud_y + 25))
-    surface.blit(val_f.render(f"Sum: {r_dep:.1f} mm", True, BLACK), (hud_x + 10, hud_y + 45))
+    surface.blit(title_f.render("Opady", True, BLACK), (hud_x + 10, hud_y + 10))
 
-    # Wizualizacja deszczu (kropla/kolor)
-    if r_int > 0.1:
-        pygame.draw.circle(surface, BLUE, (hud_x + 55, hud_y + 80), 10)
-        if r_int > 5.0:  # ulewa
-            pygame.draw.circle(surface, (0, 0, 150), (hud_x + 55, hud_y + 80), 6)
-    else:
-        pygame.draw.circle(surface, GRAY, (hud_x + 55, hud_y + 80), 10, 1)
+    # Aktualne
+    lbl_cur = val_f.render(f"Akt.: {r_int:.1f}", True, BLACK)
+    surface.blit(lbl_cur, (hud_x + 10, hud_y + 35))
+    surface.blit(val_f.render("mm/h", True, GRAY), (hud_x + 10, hud_y + 50))
+
+    # Sumaryczne
+    lbl_sum = val_f.render(f"Sum.: {r_dep:.1f}", True, BLACK)
+    surface.blit(lbl_sum, (hud_x + 10, hud_y + 70))
+    surface.blit(val_f.render("mm", True, GRAY), (hud_x + 10, hud_y + 85))
+
+    # --- SUWAK / GAUGE (Prawa strona) ---
+    bar_x = hud_x + 100
+    bar_y = hud_y + 15
+    bar_w = 15
+    bar_h = 80
+    max_val = 40.0
+
+    # 1. Rysowanie Gradientu (AliceBlue -> Navy)
+    # AliceBlue: (240, 248, 255), Navy: (0, 0, 128)
+    c_start = (240, 248, 255)
+    c_end = (0, 0, 128)
+
+    for i in range(bar_h):
+        # t = 0 (dół) -> 1 (góra)
+        t = i / bar_h
+        r = int(c_start[0] + (c_end[0] - c_start[0]) * t)
+        g = int(c_start[1] + (c_end[1] - c_start[1]) * t)
+        b = int(c_start[2] + (c_end[2] - c_start[2]) * t)
+
+        # Rysujemy linię od dołu
+        line_y = bar_y + bar_h - i
+        pygame.draw.line(surface, (r, g, b), (bar_x, line_y), (bar_x + bar_w, line_y))
+
+    pygame.draw.rect(surface, BLACK, (bar_x, bar_y, bar_w, bar_h), 1)  # Obrys
+
+    # 2. Znaczniki (Progi) po prawej
+    font_tiny = pygame.font.SysFont(None, 14)
+    steps = [0, 10, 20, 30, 40]
+    for val in steps:
+        pct = val / max_val
+        py = bar_y + bar_h - int(pct * bar_h)
+
+        # Kreska
+        pygame.draw.line(surface, BLACK, (bar_x + bar_w, py), (bar_x + bar_w + 4, py))
+        # Liczba
+        lbl = font_tiny.render(str(val), True, BLACK)
+        surface.blit(lbl, (bar_x + bar_w + 6, py - 4))
+
+    # 3. Trójkącik wskaźnika (po lewej stronie paska)
+    curr_val = max(0.0, min(max_val, r_int))
+    curr_pct = curr_val / max_val
+    curr_y = bar_y + bar_h - int(curr_pct * bar_h)
+
+    tri_pts = [
+        (bar_x, curr_y),
+        (bar_x - 6, curr_y - 4),
+        (bar_x - 6, curr_y + 4)
+    ]
+    pygame.draw.polygon(surface, RED, tri_pts)
+    pygame.draw.polygon(surface, BLACK, tri_pts, 1)
 
 
 # ====== UI CONTROLS ======
