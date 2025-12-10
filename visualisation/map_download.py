@@ -67,7 +67,7 @@ def get_map():
 
     # Zapis mapy
     os.makedirs(os.path.dirname(map_output_path), exist_ok=True)
-    plt.savefig(map_output_path, dpi=150, bbox_inches="tight", pad_inches=0)
+    plt.savefig(map_output_path, dpi=400, bbox_inches="tight", pad_inches=0)
     plt.close(fig)  # Zamknij figurę, żeby zwolnić pamięć
 
     # Zapis granic do CSV
