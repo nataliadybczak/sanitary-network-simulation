@@ -33,7 +33,6 @@ def get_dynamic_map_bounds():
     Jeśli nie - generuje je.
     Jeśli się nie uda - ZATRZYMUJE PROGRAM.
     """
-    # 1. Sprawdź czy pliki istnieją
     if not os.path.exists(BOUNDS_PATH) or not os.path.exists(MAP_IMAGE):
         print(f"\n[INFO] Brak mapy lub granic. Rozpoczynam generowanie...")
         try:
@@ -44,19 +43,14 @@ def get_dynamic_map_bounds():
             print("Sprawdź czy plik 'data/wspolrzedne.csv' istnieje i czy masz internet.")
             sys.exit(1)
 
-    # 2. Odczytaj wartości z pliku
     try:
         with open(BOUNDS_PATH, mode='r') as f:
             reader = csv.reader(f)
             header = next(reader)
             row = next(reader)
-            # Kolejność w map_download: south, north, east, west
             south, north, west, east = float(row[0]), float(row[1]), float(row[2]), float(row[3])
-
             print(f"[INFO] Wczytano mapę poprawnie.")
-            # Zwracamy w formacie (S, N, E, W)
             return (south, north, east, west)
-
     except Exception as e:
         print(f"[ERROR] Plik granic jest uszkodzony: {e}")
         print("Usuń plik data/map_bounds.csv i uruchom program ponownie.")
@@ -80,6 +74,7 @@ RED = (226, 78, 78)
 GREEN = (52, 199, 121)
 ORANGE = (245, 165, 60)
 BLUE = (66, 133, 244)
+DARK_BLUE = (0, 0, 150)
 DARK_RED = (150, 20, 20)
 YELLOW = (240, 230, 50)
 BROWN = (139, 69, 19)
@@ -121,93 +116,191 @@ def draw_blob(surface, x, y, radius, color, alpha=100):
     surface.blit(s, (x - radius, y - radius))
 
 
-# ====== Rysowanie wykresu ======
+# ====== Rysowanie wykresów ======
 def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, points_div: deque, points_rain: deque,
-               max_capacity: Optional[float]):
-    # Tło panelu
+               max_capacity: Optional[float], current_hour: int):
+    """
+    Rysuje dwa osobne wykresy:
+    1. Górny: Opady (Deszcz) - słupki od dołu
+    2. Dolny: Przepływy (Oczyszczalnia + Przelew) - linie
+    """
+    # Tło całego panelu
     pygame.draw.rect(surface, LIGHT, rect, border_radius=12)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
     if not points_est:
         return
 
-    pad_left, pad_right, pad_top, pad_bottom = 64, 24, 28, 56
-    plot = pygame.Rect(rect.left + pad_left, rect.top + pad_top, rect.width - (pad_left + pad_right),
-                       rect.height - (pad_top + pad_bottom))
+    n_points = len(points_est)
 
-    pygame.draw.rect(surface, WHITE, plot, border_radius=8)
-    pygame.draw.rect(surface, (210, 210, 210), plot, 1, border_radius=8)
+    # Marginesy wewnątrz panelu
+    margin_left = 60
+    margin_right = 20
+    margin_top = 40
+    margin_bottom = 50
+    gap = 50  # Przerwa między wykresami
 
-    # Skalowanie Y
-    all_vals = [v for _, v in points_est] + ([v for _, v in points_div] if points_div else [])
-    if max_capacity: all_vals.append(max_capacity)
-    vmin, vmax = 0.0, max(10.0, max(all_vals) * 1.1)
+    # Obliczenie wysokości wykresów
+    avail_h = rect.height - margin_top - margin_bottom - gap
+    h_rain = int(avail_h * 0.30)  # 30% na deszcz
+    h_flow = int(avail_h * 0.70)  # 70% na przepływy
 
-    n = len(points_est)
+    # Prostokąty wykresów
+    rect_rain = pygame.Rect(rect.left + margin_left, rect.top + margin_top,
+                            rect.width - margin_left - margin_right, h_rain)
 
-    # Pomocnicza funkcja do skalowania (zawiera zabezpieczenie n <= 1)
-    def xy(i, val, n_pts, y_min, y_max, p_rect):
-        if n_pts <= 1:
-            x = p_rect.left
-        else:
-            x = p_rect.left + int(i * (p_rect.width - 1) / (n_pts - 1))
+    rect_flow = pygame.Rect(rect.left + margin_left, rect_rain.bottom + gap,
+                            rect.width - margin_left - margin_right, h_flow)
 
-        # Zabezpieczenie przed dzieleniem przez zero przy y_max == y_min
-        if y_max == y_min:
-            y = p_rect.bottom
-        else:
-            y = p_rect.bottom - int((val - y_min) / (y_max - y_min) * (p_rect.height - 1))
-        return x, y
+    # Tło wykresów
+    pygame.draw.rect(surface, WHITE, rect_rain)
+    pygame.draw.rect(surface, WHITE, rect_flow)
+    pygame.draw.rect(surface, (200, 200, 200), rect_rain, 1)
+    pygame.draw.rect(surface, (200, 200, 200), rect_flow, 1)
 
-    # --- Wykres deszczu (górny pasek, odwrócony) ---
-    if points_rain:
-        rain_vals = [v for _, v in points_rain]
-        max_r = max(1.0, max(rain_vals) * 2)  # skala deszczu
+    # Czcionki
+    font_title = pygame.font.SysFont(None, 20, bold=True)
+    font_label = pygame.font.SysFont(None, 16)
+    font_unit = pygame.font.SysFont(None, 16, bold=True)
 
+    # --- OŚ X (Wspólna) ---
+    start_hour = max(0, current_hour - n_points + 1)
+    end_hour = current_hour
+    hour_range = end_hour - start_hour
+
+    if hour_range <= 0: hour_range = 1
+
+    # Dynamiczna podziałka X
+    if hour_range < 24:
+        step_x = 2
+    elif hour_range < 48:
+        step_x = 4
+    elif hour_range < 100:
+        step_x = 10
+    elif hour_range < 200:
+        step_x = 20
+    elif hour_range < 500:
+        step_x = 50
+    else:
+        step_x = 100
+
+    # Rysowanie siatki X i etykiet
+    first_tick = (start_hour // step_x) * step_x
+    if first_tick < start_hour: first_tick += step_x
+
+    current_tick = first_tick
+    while current_tick <= end_hour:
+        rel_pos = (current_tick - start_hour) / hour_range
+        px = rect_flow.left + int(rel_pos * rect_flow.width)
+
+        # Linie siatki pionowej
+        pygame.draw.line(surface, (240, 240, 240), (px, rect_rain.top), (px, rect_rain.bottom), 1)
+        pygame.draw.line(surface, (240, 240, 240), (px, rect_flow.top), (px, rect_flow.bottom), 1)
+
+        # Etykieta na dole
+        pygame.draw.line(surface, BLACK, (px, rect_flow.bottom), (px, rect_flow.bottom + 5), 1)
+        lbl = font_label.render(str(current_tick), True, BLACK)
+        surface.blit(lbl, (px - lbl.get_width() // 2, rect_flow.bottom + 8))
+
+        # Opcjonalnie: Tick na wykresie deszczu
+        pygame.draw.line(surface, BLACK, (px, rect_rain.bottom), (px, rect_rain.bottom + 5), 1)
+
+        current_tick += step_x
+
+    # Opis osi X
+    lbl_x_unit = font_unit.render("Czas symulacji [h]", True, BLACK)
+    surface.blit(lbl_x_unit, (rect_flow.centerx - lbl_x_unit.get_width() // 2, rect_flow.bottom + 25))
+
+    # === WYKRES 1: DESZCZ (GÓRNY) ===
+    # Tytuł i Jednostka
+    surface.blit(font_title.render("Opady", True, BLACK), (rect_rain.left, rect_rain.top - 20))
+    surface.blit(font_unit.render("[mm/h]", True, BLACK), (rect_rain.left - 45, rect_rain.top + 20))
+
+    # Skala Y Deszczu
+    rain_vals = [v for _, v in points_rain]
+    max_rain = max(10.0, max(rain_vals) * 1.2) if rain_vals else 10.0
+
+    # Siatka Y Deszczu (3 linie) - RYSOWANA OD DOŁU
+    for i in range(4):
+        val = max_rain * (i / 3.0)
+        # 0 na dole (bottom), max na górze (top)
+        py = rect_rain.bottom - int((val / max_rain) * rect_rain.height)
+
+        pygame.draw.line(surface, (230, 230, 230), (rect_rain.left, py), (rect_rain.right, py))
+        lbl = font_label.render(f"{val:.1f}", True, GRAY)
+        surface.blit(lbl, (rect_rain.left - lbl.get_width() - 5, py - lbl.get_height() // 2))
+
+    # Rysowanie danych deszczu (Słupki od dołu)
+    if n_points > 1:
         for i, (_, val) in enumerate(points_rain):
-            if n > 1:
-                x = plot.left + int(i * (plot.width - 1) / (n - 1))
-            else:
-                x = plot.left
-
-            # Rysujemy deszcz jako słupki od góry
-            h = int((val / max_r) * (plot.height * 0.3))  # max 30% wysokości
+            rel_x = i / (n_points - 1)
+            px = rect_rain.left + int(rel_x * rect_rain.width)
+            h = int((val / max_rain) * rect_rain.height)
             if h > 0:
-                pygame.draw.line(surface, (100, 100, 200), (x, plot.top), (x, plot.top + h), 2)
+                # Rysujemy od dołu w górę
+                pygame.draw.line(surface, DARK_BLUE, (px, rect_rain.bottom), (px, rect_rain.bottom - h), 2)
 
-    # --- Linie i siatka ---
-    y_ticks = 5
-    font = pygame.font.SysFont(None, 18)
-    for j in range(y_ticks + 1):
-        frac = j / y_ticks
-        y = plot.bottom - int(frac * (plot.height - 1))
-        pygame.draw.line(surface, (232, 232, 232), (plot.left, y), (plot.right, y), 1)
-        val = vmin + frac * (vmax - vmin)
-        label = font.render(f"{val:.0f}", True, BLACK)
-        surface.blit(label, (plot.left - 8 - label.get_width(), y - label.get_height() // 2))
+    # === WYKRES 2: PRZEPŁYWY (DOLNY) ===
+    # Tytuł i Jednostka
+    surface.blit(font_title.render("Przepływ", True, BLACK), (rect_flow.left, rect_flow.top - 20))
+    surface.blit(font_unit.render("[m3/h]", True, BLACK), (rect_flow.left - 45, rect_flow.top + 20))
 
-    if max_capacity and vmax > vmin:
-        y_lim = plot.bottom - int((max_capacity - vmin) / (vmax - vmin) * (plot.height - 1))
-        pygame.draw.line(surface, RED, (plot.left, y_lim), (plot.right, y_lim), 2)
+    # Skala Y Przepływów
+    flow_est_vals = [v for _, v in points_est]
+    flow_div_vals = [v for _, v in points_div]
+    all_flows = flow_est_vals + flow_div_vals
+    if max_capacity: all_flows.append(max_capacity)
 
-    # Serie danych
-    last_e, last_d = None, None
-    for i in range(n):
-        pe = xy(i, points_est[i][1], n, vmin, vmax, plot)
-        if last_e: pygame.draw.line(surface, BLUE, last_e, pe, 2)
-        last_e = pe
+    # Dynamiczna skala
+    max_flow = max(100.0, max(all_flows) * 1.1)
 
-        if points_div:
-            pd = xy(i, points_div[i][1], n, vmin, vmax, plot)
-            if last_d: pygame.draw.line(surface, ORANGE, last_d, pd, 2)
-            last_d = pd
+    # Siatka Y Przepływów (5 linii)
+    for i in range(5):
+        val = max_flow * (i / 4.0)
+        py = rect_flow.bottom - int((val / max_flow) * rect_flow.height)
+        pygame.draw.line(surface, (230, 230, 230), (rect_flow.left, py), (rect_flow.right, py))
+        lbl = font_label.render(f"{val:.0f}", True, GRAY)
+        surface.blit(lbl, (rect_flow.left - lbl.get_width() - 5, py - lbl.get_height() // 2))
 
-    # Tytuł
-    title = pygame.font.SysFont(None, 20).render("Przepływ (Linia) | Deszcz (Słupki z góry)", True, BLACK)
-    surface.blit(title, (plot.left, rect.top + 6))
+    # Linia Max Capacity
+    if max_capacity:
+        py_cap = rect_flow.bottom - int((max_capacity / max_flow) * rect_flow.height)
+        if rect_flow.top <= py_cap <= rect_flow.bottom:
+            pygame.draw.line(surface, RED, (rect_flow.left, py_cap), (rect_flow.right, py_cap), 1)
+            lbl_cap = font_label.render("Limit", True, RED)
+            surface.blit(lbl_cap, (rect_flow.right - lbl_cap.get_width() - 5, py_cap - 12))
+
+    # Funkcja mapująca punkt (i -> x, val -> y)
+    def get_pt(idx, val, r, max_v):
+        rel_x = idx / (n_points - 1) if n_points > 1 else 0
+        px = r.left + int(rel_x * r.width)
+        py = r.bottom - int((val / max_v) * r.height)
+        return px, py
+
+    # Rysowanie linii Est (Oczyszczalnia)
+    if n_points > 1:
+        pts_est = [get_pt(i, v, rect_flow, max_flow) for i, (_, v) in enumerate(points_est)]
+        pygame.draw.lines(surface, BLUE, False, pts_est, 2)
+
+        # Rysowanie linii Div (Przelew) - jeśli są jakiekolwiek wartości
+        if any(v > 0 for _, v in points_div):
+            pts_div = [get_pt(i, v, rect_flow, max_flow) for i, (_, v) in enumerate(points_div)]
+            pygame.draw.lines(surface, ORANGE, False, pts_div, 2)
+
+    # Legenda (wewnątrz wykresu przepływów)
+    leg_x = rect_flow.right - 120
+    leg_y = rect_flow.top + 10
+
+    # Oczyszczalnia
+    pygame.draw.line(surface, BLUE, (leg_x, leg_y), (leg_x + 20, leg_y), 2)
+    surface.blit(font_label.render("Oczyszczalnia", True, BLACK), (leg_x + 25, leg_y - 5))
+
+    # Przelew
+    pygame.draw.line(surface, ORANGE, (leg_x, leg_y + 20), (leg_x + 20, leg_y + 20), 2)
+    surface.blit(font_label.render("Przelew", True, BLACK), (leg_x + 25, leg_y + 15))
 
 
-# ====== Rysowanie mapy ======
+# ====== Rysowanie mapy (Bez zmian) ======
 def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: threading.Lock):
     if not hasattr(draw_map, "_bg"):
         draw_map._bg = pygame.image.load(MAP_IMAGE).convert()
@@ -339,8 +432,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     surface.set_clip(None)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
-    # 5. Panel informacyjny (HUD) na mapie - DESZCZ (ZMODYFIKOWANY)
-
+    # 5. Panel informacyjny (HUD) na mapie - DESZCZ
     hud_w, hud_h = 160, 110
     hud_x, hud_y = rect.right - hud_w - 20, rect.top + 20
 
@@ -375,22 +467,19 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     max_val = 40.0
 
     # 1. Rysowanie Gradientu (AliceBlue -> Navy)
-    # AliceBlue: (240, 248, 255), Navy: (0, 0, 128)
     c_start = (240, 248, 255)
     c_end = (0, 0, 128)
 
     for i in range(bar_h):
-        # t = 0 (dół) -> 1 (góra)
         t = i / bar_h
         r = int(c_start[0] + (c_end[0] - c_start[0]) * t)
         g = int(c_start[1] + (c_end[1] - c_start[1]) * t)
         b = int(c_start[2] + (c_end[2] - c_start[2]) * t)
 
-        # Rysujemy linię od dołu
         line_y = bar_y + bar_h - i
         pygame.draw.line(surface, (r, g, b), (bar_x, line_y), (bar_x + bar_w, line_y))
 
-    pygame.draw.rect(surface, BLACK, (bar_x, bar_y, bar_w, bar_h), 1)  # Obrys
+    pygame.draw.rect(surface, BLACK, (bar_x, bar_y, bar_w, bar_h), 1)
 
     # 2. Znaczniki (Progi) po prawej
     font_tiny = pygame.font.SysFont(None, 14)
@@ -398,14 +487,11 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     for val in steps:
         pct = val / max_val
         py = bar_y + bar_h - int(pct * bar_h)
-
-        # Kreska
         pygame.draw.line(surface, BLACK, (bar_x + bar_w, py), (bar_x + bar_w + 4, py))
-        # Liczba
         lbl = font_tiny.render(str(val), True, BLACK)
         surface.blit(lbl, (bar_x + bar_w + 6, py - 4))
 
-    # 3. Trójkącik wskaźnika (po lewej stronie paska)
+    # 3. Trójkącik wskaźnika
     curr_val = max(0.0, min(max_val, r_int))
     curr_pct = curr_val / max_val
     curr_y = bar_y + bar_h - int(curr_pct * bar_h)
@@ -420,12 +506,9 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
 
 
 # ====== UI CONTROLS ======
-
-# Kolory UI
 UI_BG = (240, 240, 240)
 UI_BORDER = (180, 180, 180)
 BUTTON_HOVER = (220, 225, 230)
-BUTTON_ACTIVE = (200, 205, 210)
 SLIDER_BG = (200, 200, 200)
 SLIDER_FILL = (100, 160, 220)
 
@@ -441,11 +524,6 @@ _ui_state = UIState()
 def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
                      pause_evt: threading.Event, stop_evt: threading.Event,
                      min_interval: float, max_interval: float):
-    """
-    Rysuje pasek kontrolny na dole ekranu:
-    [RESET]  [PLAY/PAUSE]  [ SUWAK PRĘDKOŚCI ]  [ TEKST: GODZINA X / MAX ]
-    """
-    # Tło paska
     panel_rect = pygame.Rect(rect.centerx - 250, rect.bottom - 70, 500, 60)
     pygame.draw.rect(surface, UI_BG, panel_rect, border_radius=15)
     pygame.draw.rect(surface, UI_BORDER, panel_rect, 2, border_radius=15)
@@ -453,64 +531,53 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     mouse_pos = pygame.mouse.get_pos()
     is_paused = pause_evt.is_set()
 
-    # 1. Przycisk RESET (Stop/Rewind)
+    # Reset
     btn_reset = pygame.Rect(panel_rect.left + 20, panel_rect.centery - 15, 30, 30)
     col_reset = BUTTON_HOVER if btn_reset.collidepoint(mouse_pos) else UI_BG
     pygame.draw.rect(surface, col_reset, btn_reset, border_radius=5)
     pygame.draw.rect(surface, BLACK, btn_reset, 2, border_radius=5)
-    # Ikona (kwadrat)
     pygame.draw.rect(surface, RED, (btn_reset.centerx - 6, btn_reset.centery - 6, 12, 12))
 
-    # 2. Przycisk PLAY/PAUSE
+    # Play/Pause
     btn_play = pygame.Rect(panel_rect.left + 65, panel_rect.centery - 20, 40, 40)
     col_play = BUTTON_HOVER if btn_play.collidepoint(mouse_pos) else UI_BG
     pygame.draw.circle(surface, col_play, btn_play.center, 20)
     pygame.draw.circle(surface, BLACK, btn_play.center, 20, 2)
 
     if is_paused:
-        # Rysuj trójkąt (Play)
         pts = [(btn_play.centerx - 5, btn_play.centery - 8),
                (btn_play.centerx - 5, btn_play.centery + 8),
                (btn_play.centerx + 8, btn_play.centery)]
         pygame.draw.polygon(surface, GREEN, pts)
     else:
-        # Rysuj dwie kreski (Pause)
         pygame.draw.rect(surface, BLACK, (btn_play.centerx - 6, btn_play.centery - 8, 4, 16))
         pygame.draw.rect(surface, BLACK, (btn_play.centerx + 2, btn_play.centery - 8, 4, 16))
 
-    # 3. Suwak Prędkości
-    # Pobierz aktualny slider_val (0.0 - 1.0)
+    # Slider
     slider_val = shared.get("ui_slider_val", 0.5)
-
     slider_rect = pygame.Rect(panel_rect.left + 130, panel_rect.centery - 4, 180, 8)
     pygame.draw.rect(surface, SLIDER_BG, slider_rect, border_radius=4)
-
-    # Wypełnienie (od lewej do kropki)
     handle_x = slider_rect.left + int(slider_val * slider_rect.width)
     fill_rect = pygame.Rect(slider_rect.left, slider_rect.top, handle_x - slider_rect.left, slider_rect.height)
     pygame.draw.rect(surface, SLIDER_FILL, fill_rect, border_radius=4)
 
-    # Uchwyt
     handle_rect = pygame.Rect(handle_x - 8, slider_rect.centery - 8, 16, 16)
     pygame.draw.circle(surface, BLUE, handle_rect.center, 8)
     pygame.draw.circle(surface, BLACK, handle_rect.center, 8, 1)
 
-    # Etykiety suwaka
     font_small = pygame.font.SysFont(None, 16)
     surface.blit(font_small.render("Wolno", True, GRAY), (slider_rect.left, slider_rect.bottom + 5))
     surface.blit(font_small.render("Szybko", True, GRAY), (slider_rect.right - 35, slider_rect.bottom + 5))
 
-    # 4. Tekst statusu
+    # Status
     hour = shared.get("hour", 0)
-    max_h = shared.get("max_hours", 168)  # Domyślnie 168 jeśli brak w shared
+    max_h = shared.get("max_hours", 168)
     font_status = pygame.font.SysFont(None, 24, bold=True)
-
     status_text = f"Godzina: {hour} / {max_h + 1}"
     txt_surf = font_status.render(status_text, True, BLACK)
     surface.blit(txt_surf,
                  (panel_rect.right - 10 - txt_surf.get_width(), panel_rect.centery - txt_surf.get_height() // 2))
 
-    # Logika przeciągania suwaka
     if _ui_state.dragging_slider:
         if not pygame.mouse.get_pressed()[0]:
             _ui_state.dragging_slider = False
@@ -518,9 +585,6 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
             mx = min(max(mouse_pos[0], slider_rect.left), slider_rect.right)
             new_val = (mx - slider_rect.left) / slider_rect.width
             shared["ui_slider_val"] = new_val
-
-            # Przelicz interwał: (0.0 -> max_interval [wolno], 1.0 -> min_interval [szybko])
-            # Odwrócona logika: 0% suwaka to MAX interwał (wolno)
             new_interval = max_interval - new_val * (max_interval - min_interval)
             shared["sim_interval"] = new_interval
 
@@ -528,29 +592,20 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
 
 
 def handle_ui_click(event, btn_reset, btn_play, slider_rect, shared, pause_evt):
-    """Obsługa kliknięć w elementy UI"""
     if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
         mx, my = event.pos
-
-        # Reset
         if btn_reset.collidepoint((mx, my)):
             print("[UI] Kliknięto RESET")
-            shared["reset_cmd"] = True  # Wysyłamy sygnał do simulation_engine
-            pause_evt.set()  # Pauzujemy na czas resetu (opcjonalnie)
-
-        # Play/Pause
+            shared["reset_cmd"] = True
+            pause_evt.set()
         elif btn_play.collidepoint((mx, my)):
             if pause_evt.is_set():
-                pause_evt.clear()
+                pause_evt.clear();
                 print("[UI] Wznowienie")
             else:
-                pause_evt.set()
+                pause_evt.set();
                 print("[UI] Pauza")
-
-        # Slider (start dragging)
         elif slider_rect.inflate(10, 10).collidepoint((mx, my)):
             _ui_state.dragging_slider = True
-            # Od razu zaktualizuj pozycję przy kliknięciu
             new_val = (mx - slider_rect.left) / slider_rect.width
-            new_val = max(0.0, min(1.0, new_val))
-            shared["ui_slider_val"] = new_val
+            shared["ui_slider_val"] = max(0.0, min(1.0, new_val))
