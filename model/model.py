@@ -14,7 +14,7 @@ def _calculate_distance(loc1, loc2):
 
 # MODEL SYSTEMU KANALIZACYJNEGO
 class SewerSystemModel(Model):
-    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168):
+    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168, rain_file="data/rain.csv"):
 
         #graf przepływomierzy
         default_graph = {
@@ -103,8 +103,9 @@ class SewerSystemModel(Model):
         self.running = True
 
         # Intensywność deszczu
+        file_path = os.path.join(rain_file[0:rain_file.rfind("/")],rain_file[rain_file.rfind("/")+1:])
         # file_path = os.path.join("data", "rain.csv") #standardowy plik csv - różne wartości opadów
-        file_path = os.path.join("data/rain_experiments", "realistic.csv") # eksperymenty - nazwa pliku do podmiany
+        # file_path = os.path.join("data/rain_experiments", "realistic.csv") # eksperymenty - nazwa pliku do podmiany
         df_rain = pd.read_csv(file_path)
         self.rain_intensity_data = df_rain["rain_mm_h"].tolist()
 
