@@ -2,9 +2,9 @@ from visualisation.graphics_functions import *
 from model.model import SewerSystemModel
 from visualisation.simulation_engine import SimulationThread
 
+# wyrzucenie komentarzy i warningów z Pygame
 import os
 import warnings
-
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 
@@ -57,26 +57,26 @@ def map_window_loop(shared, lock, pause_evt, stop_evt, pos=(0, 50)):
 
             if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 if pause_evt.is_set():
-                    pause_evt.clear();
+                    pause_evt.clear()
                     print("[MAP] Wznawiam (Spacja)")
                 else:
-                    pause_evt.set();
+                    pause_evt.set()
                     print("[MAP] Pauza (Spacja)")
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if MAP_ONLY_RECT.collidepoint(event.pos):
-                    dragging = True;
+                    dragging = True
                     last_pos = event.pos
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                dragging = False;
+                dragging = False
                 last_pos = None
             elif event.type == pygame.MOUSEMOTION and dragging:
-                mx, my = event.pos;
-                lx, ly = last_pos;
-                dx, dy = mx - lx, my - ly;
+                mx, my = event.pos
+                lx, ly = last_pos
+                dx, dy = mx - lx, my - ly
                 last_pos = (mx, my)
                 with lock:
-                    s = shared["map_scale"];
+                    s = shared["map_scale"]
                     ox, oy = shared["map_offset"]
                     sw, sh = MAP_ONLY_RECT.width * s, MAP_ONLY_RECT.height * s
                     ox = min(0, max(MAP_ONLY_RECT.width - sw, ox + dx))
@@ -86,13 +86,13 @@ def map_window_loop(shared, lock, pause_evt, stop_evt, pos=(0, 50)):
                 mx, my = pygame.mouse.get_pos()
                 if MAP_ONLY_RECT.collidepoint((mx, my)):
                     with lock:
-                        s_old = shared["map_scale"];
+                        s_old = shared["map_scale"]
                         ox, oy = shared["map_offset"]
                         s_new = min(6.0, max(1.0, s_old * (1.1 if event.y > 0 else 1 / 1.1)))
                         if s_new != s_old:
-                            rx = mx - MAP_ONLY_RECT.left;
+                            rx = mx - MAP_ONLY_RECT.left
                             ry = my - MAP_ONLY_RECT.top
-                            u = rx - ox;
+                            u = rx - ox
                             v = ry - oy
                             ox = rx - u * (s_new / s_old)
                             oy = ry - v * (s_new / s_old)
@@ -118,7 +118,7 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
     pygame.init()
     pygame.display.set_caption("SewerSystem — CHART & RAIN")
 
-    # ZWIĘKSZONA WYSOKOŚĆ OKNA DLA 3 WYKRESÓW
+    # parametry okna
     WIN_W, WIN_H = 900, 900
     CHART_ONLY_RECT = pygame.Rect(12, 12, WIN_W - 24, WIN_H - 24)
 
@@ -151,15 +151,14 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
 
         # Wykrywanie RESETU
         if hour < last_hour_check:
-            points_est.clear();
+            points_est.clear()
             points_div.clear()
-            points_rain_int.clear();
+            points_rain_int.clear()
             points_rain_dep.clear()
         last_hour_check = hour
 
         if pt is not None:
             ts, est, div = pt
-            # Dodajemy tylko unikalne punkty czasowe
             if not points_est or points_est[-1][0] != ts:
                 points_est.append((ts, est))
                 points_div.append((ts, div))
@@ -171,7 +170,7 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
                 points_rain_int.append((ts, r_int))
                 points_rain_dep.append((ts, r_dep))
 
-        # Przekazujemy wszystkie dane do nowej funkcji rysującej 3 wykresy
+        # Rysowanie wykresów
         draw_chart(screen, CHART_ONLY_RECT, points_est, points_div,
                    points_rain_int, points_rain_dep, max_capacity, hour)
 
@@ -239,5 +238,7 @@ def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file 
 
 if __name__ == "__main__":
     print("\n=== Symulacja rozpoczęta ===")
-    run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL) # rain_file można tu dodać
+    run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL) # konfiguracja rain_file i domyślnego interwału
+                                                                # co jaki jest krok robiony w symulacji
+                                                                # (czas rzeczywisty, nie parametr symulacji)
     print("\n=== Symulacja zakończona ===")

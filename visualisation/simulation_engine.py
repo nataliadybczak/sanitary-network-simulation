@@ -1,9 +1,7 @@
 import threading
-from typing import Dict, Optional, Tuple
-from model.model import SewerSystemModel
+from typing import Dict
 import pandas as pd
 import time
-import sys
 
 
 # ====== Wątek symulacji ======
@@ -11,8 +9,7 @@ class SimulationThread(threading.Thread):
     def __init__(self, model_factory_fn, interval: float, shared: Dict, lock: threading.Lock,
                  stop_evt: threading.Event, pause_evt: threading.Event):
         super().__init__(daemon=True)
-        # UWAGA: Teraz przyjmujemy funkcję fabrykującą (lambda), a nie instancję,
-        # żeby móc łatwo stworzyć nowy model przy resecie.
+        # Fabryka nie instancja, żeby działał reset
         self.model_factory = model_factory_fn
         self.model = self.model_factory()
 
@@ -34,7 +31,7 @@ class SimulationThread(threading.Thread):
             active_ids.add(s.location_id)
 
         loc_map["KP26"] = self.model.overflow_point.location
-        active_ids.add("KP26");
+        active_ids.add("KP26")
         active_ids.add(self.model.overflow_point.location_id)
         loc_map["Oczyszczalnia"] = self.model.plant.location
         active_ids.add("Oczyszczalnia")
@@ -43,7 +40,7 @@ class SimulationThread(threading.Thread):
         if hasattr(self.model, "coords") and self.model.coords:
             for pid, coord in self.model.coords.items():
                 if pid not in active_ids:
-                    lat = coord.get('lat');
+                    lat = coord.get('lat')
                     lon = coord.get('lon')
                     if lat and lon: extra_points.append((pid, lat, lon))
 
@@ -79,27 +76,26 @@ class SimulationThread(threading.Thread):
             "max_capacity": self.model.max_capacity,
             "running": self.model.running,
             "hour": self.model.current_hour,
-            "max_hours": self.model.max_hours  # Przesyłamy max_hours do UI
+            "max_hours": self.model.max_hours
         }
         with self.lock:
             self.shared.update(snapshot)
 
     def run(self):
         print("[SIM] start")
-        # Inicjalny zrzut stanu (żeby UI miało co pokazać od razu)
+        # Inicjalny zrzut stanu (przy samym starcie, bez danych)
         self._update_shared_state()
 
         try:
             while not self.stop_evt.is_set():
-                # 1. Obsługa RESETU
+                # Obsługa RESETU
                 if self.shared.get("reset_cmd", False):
                     print("[SIM] RESETOWANIE MODELU...")
-                    self.model = self.model_factory()  # Tworzymy nowy, czysty model
-                    self.shared["reset_cmd"] = False  # Kasujemy flagę
-                    self.pause_evt.set()  # Po resecie pauzujemy (start buttonem)
+                    self.model = self.model_factory()  # Tworzenie nowy, czysty model
+                    self.shared["reset_cmd"] = False  # Kasowanie flagi
+                    self.pause_evt.set()  # Pauza po resecie
 
-                    # Czyścimy historię wykresów w shared (opcjonalnie, ale zalecane)
-                    # W tym podejściu UI samo musi wykryć zmianę godziny na mniejszą i wyczyścić deque
+                    # Czyszczenie historii
 
                     self._update_shared_state()  # Wysyłamy stan "0"
                     print("[SIM] Model zresetowany.")
