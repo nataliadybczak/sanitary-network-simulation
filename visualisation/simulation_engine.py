@@ -88,7 +88,7 @@ class SimulationThread(threading.Thread):
 
         try:
             while not self.stop_evt.is_set():
-                # Obsługa RESETU
+                # 1. Obsługa RESETU
                 if self.shared.get("reset_cmd", False):
                     print("[SIM] RESETOWANIE MODELU...")
                     self.model = self.model_factory()  # Tworzenie nowy, czysty model
@@ -96,8 +96,7 @@ class SimulationThread(threading.Thread):
                     self.pause_evt.set()  # Pauza po resecie
 
                     # Czyszczenie historii
-
-                    self._update_shared_state()  # Wysyłamy stan "0"
+                    self._update_shared_state()
                     print("[SIM] Model zresetowany.")
                     time.sleep(0.5)
                     continue

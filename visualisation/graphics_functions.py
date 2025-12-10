@@ -1,13 +1,14 @@
 from __future__ import annotations
 import threading
 from collections import deque
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple
 import os
 import math
 import warnings
 import sys
 import csv
 
+# wyrzucenie komentarzy i warningów z Pygame
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "1"
 warnings.filterwarnings("ignore", category=UserWarning, message=".*pkg_resources is deprecated.*")
 import pygame
@@ -21,11 +22,11 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-# Definicje ścieżek do danych (bezwzględne)
+# Definicje ścieżek do danych (bezwzględne, żeby ściąganie mapki/wczytywanie z pliku działało)
 BOUNDS_PATH = os.path.join(PROJECT_ROOT, "data", "map_bounds.csv")
 MAP_IMAGE = os.path.join(PROJECT_ROOT, "visualisation", "map.png")
 
-
+# ściąganie granic mapy
 def get_dynamic_map_bounds():
     if not os.path.exists(BOUNDS_PATH) or not os.path.exists(MAP_IMAGE):
         print(f"\n[INFO] Brak mapy lub granic. Rozpoczynam generowanie...")
@@ -67,14 +68,14 @@ GREEN = (52, 199, 121)
 ORANGE = (245, 165, 60)
 BLUE = (66, 133, 244)
 DARK_BLUE = (0, 0, 150)
-CYAN = (0, 180, 180)  # Dla Depth
+CYAN = (0, 180, 180)
 DARK_CYAN = (0, 100, 100)
 DARK_RED = (150, 20, 20)
 YELLOW = (240, 230, 50)
 BROWN = (139, 69, 19)
 
 
-# ====== Pomocnicze ======
+# ====== Funkcje Pomocnicze ======
 def geo_to_px(lat: float, lon: float, rect: pygame.Rect, bounds=MAP_BOUNDS) -> Tuple[int, int]:
     min_lat, max_lat, min_lon, max_lon = bounds
     nx = (lon - min_lon) / (max_lon - min_lon)
@@ -159,7 +160,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
         if end_h <= start_h: return
         hour_range = end_h - start_h
 
-        # Paski co 24h (dla uproszczenia wizualnego, co drugi dzień)
+        # Paski co 24h (co drugi dzień)
         # Zakładamy start symulacji = godzina 0
         curr = start_h
         while curr <= end_h:
@@ -173,7 +174,6 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
                 px1 = target_rect.left + int(rel_x1 * target_rect.width)
                 px2 = target_rect.left + int(rel_x2 * target_rect.width)
 
-                # Clip
                 px1 = max(target_rect.left, min(target_rect.right, px1))
                 px2 = max(target_rect.left, min(target_rect.right, px2))
 
@@ -195,7 +195,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     font_label = pygame.font.SysFont(None, 14)
     font_unit = pygame.font.SysFont(None, 14, bold=True)
 
-    # === OŚ X (Wspólna - rysowana tylko na dole) ===
+    # === OŚ X - podziałka ===
     if hour_range < 24:
         step_x = 2
     elif hour_range < 48:
@@ -224,7 +224,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
         pygame.draw.line(surface, col_grid, (px, rect_dep.top), (px, rect_dep.bottom), 1)
         pygame.draw.line(surface, col_grid, (px, rect_flow.top), (px, rect_flow.bottom), 1)
 
-        # Tick i etykieta na dole
+        # podziałki i etykiety
         pygame.draw.line(surface, BLACK, (px, rect_int.bottom), (px, rect_int.bottom + 4), 1)
         lbl = font_label.render(str(curr_tick), True, BLACK)
         surface.blit(lbl, (px - lbl.get_width() // 2, rect_int.bottom + 6))
@@ -276,7 +276,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     draw_y_grid(rect_dep, max_dep)
 
     if n_points > 1:
-        # Rysowanie jako wypełniony obszar (wielokąt)
+        # Rysowanie jako wypełniony obszar pod wykresem
         poly_points = [(rect_dep.left, rect_dep.bottom)]
         for i, (_, val) in enumerate(points_rain_dep):
             rel_x = i / (n_points - 1)
@@ -322,7 +322,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
             pts_est.append((px, py_est))
 
             v_div = points_div[i][1]
-            if v_div > 0:  # Tylko jeśli > 0
+            if v_div > 0:
                 py_div = rect_flow.bottom - int((v_div / max_flow) * rect_flow.height)
                 pts_div.append((px, py_div))
             else:
@@ -447,7 +447,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         # 3. Wewnętrzne kółko
         pygame.draw.circle(surface, p_col, (x, y), PLANT_RADIUS - 5)
 
-        # PASEK POSTĘPU PO PRAWEJ
+        # PASEK WYPEŁNIENIA PO PRAWEJ
         bar_h = 36
         bar_w = 8
         fill_pct = min(1.0, est / (hyd * 1.2))
@@ -464,7 +464,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     surface.set_clip(None)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
-    # === 5. HUD DESZCZU (ZMODYFIKOWANY: DWA SUWAKI) ===
+    # === 5. HUD DESZCZU (DWA SUWAKI) ===
     hud_w, hud_h = 180, 130
     hud_x, hud_y = rect.right - hud_w - 20, rect.top + 20
 
@@ -474,12 +474,13 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     r_int = rain.get("intensity", 0.0)
     r_dep = rain.get("depth", 0.0)
 
+    # czcionki
     title_f = pygame.font.SysFont(None, 20, bold=True)
-    val_f = pygame.font.SysFont(None, 14)  # Mniejsza czcionka dla etykiet
+    val_f = pygame.font.SysFont(None, 14)
 
     surface.blit(title_f.render("Opady deszczu", True, BLACK), (hud_x + 10, hud_y + 10))
 
-    # Funkcja rysująca pojedynczy pasek (gauge)
+    # Funkcja rysująca pojedynczy pasek
     def draw_gauge(x, y, w, h, val, max_v, c_start, c_end, title, unit):
         # Tytuł i wartość
         surface.blit(val_f.render(title, True, BLACK), (x, y))
@@ -535,14 +536,11 @@ _ui_state = UIState()
 def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
                      pause_evt: threading.Event, stop_evt: threading.Event,
                      min_interval: float, max_interval: float):
-    """
-    Rysuje pasek kontrolny na dole ekranu (Zmodernizowany styl).
-    """
-    # Wymiary i pozycja panelu (nieco wyższy i szerszy dla czytelności)
+    # Wymiary i pozycja panelu
     panel_w, panel_h = 700, 85
     panel_rect = pygame.Rect(rect.centerx - panel_w // 2, rect.bottom - panel_h - 20, panel_w, panel_h)
 
-    # Stylistyka zgodna z wykresami (Białe tło, szara ramka)
+    # Tło
     pygame.draw.rect(surface, LIGHT , panel_rect, border_radius=12)
     pygame.draw.rect(surface, GRAY, panel_rect, 1, border_radius=12)  # Cieńsza ramka
 
@@ -554,7 +552,7 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     font_bold = pygame.font.SysFont(None, 20, bold=True)
     font_small = pygame.font.SysFont(None, 16)
 
-    # === SEKCJA 1: PRZYCISKI (Lewa strona) ===
+    # === SEKCJA 1: PRZYCISKI  ===
     btn_w, btn_h = 80, 34
     spacing = 15
     start_x = panel_rect.left + 20
@@ -594,7 +592,7 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
 
     surface.blit(lbl_play, (btn_play.left + 28, btn_play.centery - lbl_play.get_height() // 2))
 
-    # === SEKCJA 2: SUWAK PRĘDKOŚCI (Środek) ===
+    # === SEKCJA 2: SUWAK PRĘDKOŚCI ===
     slider_x = btn_play.right + 40
     slider_w = 280
     slider_y = panel_rect.centery + 8
@@ -610,16 +608,16 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     slider_val = shared.get("ui_slider_val", 0.5)
     handle_x = slider_rect.left + int(slider_val * slider_rect.width)
 
-    # Wypełnienie aktywne (niebieskie)
+    # Wypełnienie aktywne
     fill_rect = pygame.Rect(slider_rect.left, slider_rect.top, handle_x - slider_rect.left, slider_rect.height)
     pygame.draw.rect(surface, DARK_BLUE, fill_rect, border_radius=3)
 
     # Uchwyt
     handle_rect = pygame.Rect(handle_x - 8, slider_rect.centery - 8, 16, 16)
     pygame.draw.circle(surface, WHITE, handle_rect.center, 8)
-    pygame.draw.circle(surface, DARK_BLUE, handle_rect.center, 8, 3)  # Obrys niebieski
+    pygame.draw.circle(surface, DARK_BLUE, handle_rect.center, 8, 3)
 
-    # Podpisy pod suwakiem (z wartościami liczbowymi)
+    # Podpisy pod suwakiem
     # Wolno = max_interval, Szybko = min_interval
     lbl_slow = font_small.render(f"Wolno ({max_interval}s)", True, GRAY)
     lbl_fast = font_small.render(f"Szybko ({min_interval}s)", True, GRAY)
@@ -627,18 +625,17 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     surface.blit(lbl_slow, (slider_rect.left, slider_rect.bottom + 5))
     surface.blit(lbl_fast, (slider_rect.right - lbl_fast.get_width(), slider_rect.bottom + 5))
 
-    # === SEKCJA 3: CZAS (Prawa strona) ===
+    # === SEKCJA 3: CZAS ===
     time_x = slider_rect.right + 40
 
-    # Etykieta górna
+    # Etykieta
     lbl_time_title = font_bold.render("Czas symulacji", True, BLACK)
     surface.blit(lbl_time_title, (time_x, panel_rect.top + 15))
 
-    # Wartość dolna
+    # Wartość
     hour = shared.get("hour", 0)
     max_h = shared.get("max_hours", 168)
 
-    # Formatowanie z zerem wiodącym dla estetyki (opcjonalne)
     time_str = f"{hour} / {max_h + 1} [h]"
     lbl_time_val = font_ui.render(time_str, True, DARK_BLUE)  # Kolor akcentu
     surface.blit(lbl_time_val, (time_x, panel_rect.centery + 5))

@@ -6,26 +6,18 @@ import csv
 
 
 def get_map():
-    # 1. Ustal folder, w którym fizycznie leży ten skrypt (czyli folder 'visualisation')
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    # 2. Ustal folder główny projektu (wychodzimy piętro wyżej: visualisation -> root)
     PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
 
-    # 3. Buduj poprawne ścieżki
     # Dane wejściowe są w głównym folderze w 'data'
     csv_path = os.path.join(PROJECT_ROOT, "data", "wspolrzedne.csv")
 
-    # Mapa ma zostać zapisana w folderze skryptu (visualisation)
     map_output_path = os.path.join(SCRIPT_DIR, "map.png")
-
-    # Granice mapy zapisujemy w folderze data (głównym)
     bounds_output_path = os.path.join(PROJECT_ROOT, "data", "map_bounds.csv")
 
     print(f"[MAPA] Szukam pliku CSV tutaj: {csv_path}")
 
     if not os.path.exists(csv_path):
-        # Diagnostyka
         data_dir = os.path.dirname(csv_path)
         print(f"[DEBUG] Folder data istnieje? {os.path.exists(data_dir)}")
         if os.path.exists(data_dir):
@@ -35,7 +27,7 @@ def get_map():
     print(f"[MAPA] Wczytuję dane z: {csv_path}")
     df = pd.read_csv(csv_path)
 
-    # Znajdź skrajne punkty
+    # Skrajne punkty
     min_lat = df["lat"].min()
     max_lat = df["lat"].max()
     min_lon = df["lon"].min()
@@ -68,12 +60,12 @@ def get_map():
     # Zapis mapy
     os.makedirs(os.path.dirname(map_output_path), exist_ok=True)
     plt.savefig(map_output_path, dpi=400, bbox_inches="tight", pad_inches=0)
-    plt.close(fig)  # Zamknij figurę, żeby zwolnić pamięć
+    plt.close(fig)
 
     # Zapis granic do CSV
     with open(bounds_output_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['south', 'north', 'east', 'west'])
+        writer.writerow(['south', 'north','west', 'east' ])
         writer.writerow([south, north, west, east])
 
     print(f"[MAPA] Sukces! Mapa zapisana w: {map_output_path}")
