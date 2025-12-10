@@ -14,11 +14,10 @@ import pygame
 
 from visualisation.map_download import get_map
 
-# Ustalanie ścieżek absolutnych względem pliku graphics_functions.py
+# Ustalanie ścieżek absolutnych
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..'))
 
-# Dodaj root do sys.path, aby importować map_download
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
@@ -28,31 +27,23 @@ MAP_IMAGE = os.path.join(PROJECT_ROOT, "visualisation", "map.png")
 
 
 def get_dynamic_map_bounds():
-    """
-    Sprawdza czy istnieje plik CSV i obraz mapy.
-    Jeśli nie - generuje je.
-    Jeśli się nie uda - ZATRZYMUJE PROGRAM.
-    """
     if not os.path.exists(BOUNDS_PATH) or not os.path.exists(MAP_IMAGE):
         print(f"\n[INFO] Brak mapy lub granic. Rozpoczynam generowanie...")
         try:
             get_map()
         except Exception as e:
-            print(f"[CRITICAL ERROR] Nie udało się wygenerować mapy!")
-            print(f"Powód: {e}")
+            print(f"[CRITICAL ERROR] Nie udało się wygenerować mapy: {e}")
             print("Sprawdź czy plik 'data/wspolrzedne.csv' istnieje i czy masz internet.")
             sys.exit(1)
 
     try:
         with open(BOUNDS_PATH, mode='r') as f:
             reader = csv.reader(f)
-            header = next(reader)
+            next(reader)
             row = next(reader)
-            south, north, west, east = float(row[0]), float(row[1]), float(row[2]), float(row[3])
-            print(f"[INFO] Wczytano mapę poprawnie.")
-            return (south, north, east, west)
+            return (float(row[0]), float(row[1]), float(row[2]), float(row[3]))
     except Exception as e:
-        print(f"[ERROR] Plik granic jest uszkodzony: {e}")
+        print(f"[ERROR] Plik granic uszkodzony: {e}")
         print("Usuń plik data/map_bounds.csv i uruchom program ponownie.")
         sys.exit(1)
 
@@ -70,11 +61,14 @@ WHITE = (255, 255, 255)
 BLACK = (25, 25, 25)
 GRAY = (140, 140, 140)
 LIGHT = (236, 240, 245)
+LIGHT_GRAY_BG = (245, 245, 245)
 RED = (226, 78, 78)
 GREEN = (52, 199, 121)
 ORANGE = (245, 165, 60)
 BLUE = (66, 133, 244)
 DARK_BLUE = (0, 0, 150)
+CYAN = (0, 180, 180)  # Dla Depth
+DARK_CYAN = (0, 100, 100)
 DARK_RED = (150, 20, 20)
 YELLOW = (240, 230, 50)
 BROWN = (139, 69, 19)
@@ -85,7 +79,7 @@ def geo_to_px(lat: float, lon: float, rect: pygame.Rect, bounds=MAP_BOUNDS) -> T
     min_lat, max_lat, min_lon, max_lon = bounds
     nx = (lon - min_lon) / (max_lon - min_lon)
     ny = (max_lat - lat) / (max_lat - min_lat)
-    x = int(rect.right - nx * rect.width)
+    x = int(rect.left + nx * rect.width)
     y = int(rect.top + ny * rect.height)
     return x, y
 
@@ -117,14 +111,16 @@ def draw_blob(surface, x, y, radius, color, alpha=100):
 
 
 # ====== Rysowanie wykresów ======
-def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, points_div: deque, points_rain: deque,
+def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, points_div: deque,
+               points_rain_int: deque, points_rain_dep: deque,
                max_capacity: Optional[float], current_hour: int):
     """
-    Rysuje dwa osobne wykresy:
-    1. Górny: Opady (Deszcz) - słupki od dołu
-    2. Dolny: Przepływy (Oczyszczalnia + Przelew) - linie
+    Rysuje TRZY wykresy:
+    1. Intensywność Opady [mm/h]
+    2. Suma Opady (Depth) [mm]
+    3. Przepływy [m3/h]
     """
-    # Tło całego panelu
+    # Tło panelu
     pygame.draw.rect(surface, LIGHT, rect, border_radius=12)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
@@ -133,44 +129,73 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
 
     n_points = len(points_est)
 
-    # Marginesy wewnątrz panelu
+    # Marginesy
     margin_left = 60
     margin_right = 20
-    margin_top = 40
+    margin_top = 30
     margin_bottom = 50
     gap = 50  # Przerwa między wykresami
 
-    # Obliczenie wysokości wykresów
-    avail_h = rect.height - margin_top - margin_bottom - gap
-    h_rain = int(avail_h * 0.30)  # 30% na deszcz
-    h_flow = int(avail_h * 0.70)  # 70% na przepływy
+    # Wysokość dostępna na wykresy
+    total_h = rect.height - margin_top - margin_bottom - (2 * gap)
+    # Podział wysokości: np. 25% Int, 25% Dep, 50% Flow
+    h_int = int(total_h * 0.25)
+    h_dep = int(total_h * 0.25)
+    h_flow = int(total_h * 0.50)
 
-    # Prostokąty wykresów
-    rect_rain = pygame.Rect(rect.left + margin_left, rect.top + margin_top,
-                            rect.width - margin_left - margin_right, h_rain)
+    # Definicje prostokątów
+    rect_int = pygame.Rect(rect.left + margin_left, rect.top + margin_top,
+                           rect.width - margin_left - margin_right, h_int)
 
-    rect_flow = pygame.Rect(rect.left + margin_left, rect_rain.bottom + gap,
+    rect_dep = pygame.Rect(rect.left + margin_left, rect_int.bottom + gap,
+                           rect.width - margin_left - margin_right, h_dep)
+
+    rect_flow = pygame.Rect(rect.left + margin_left, rect_dep.bottom + gap,
                             rect.width - margin_left - margin_right, h_flow)
 
-    # Tło wykresów
-    pygame.draw.rect(surface, WHITE, rect_rain)
-    pygame.draw.rect(surface, WHITE, rect_flow)
-    pygame.draw.rect(surface, (200, 200, 200), rect_rain, 1)
-    pygame.draw.rect(surface, (200, 200, 200), rect_flow, 1)
+    # Funkcja pomocnicza: Tło dni
+    def draw_bg(target_rect, start_h, end_h):
+        pygame.draw.rect(surface, WHITE, target_rect)
+        if end_h <= start_h: return
+        hour_range = end_h - start_h
 
-    # Czcionki
-    font_title = pygame.font.SysFont(None, 20, bold=True)
-    font_label = pygame.font.SysFont(None, 16)
-    font_unit = pygame.font.SysFont(None, 16, bold=True)
+        # Paski co 24h (dla uproszczenia wizualnego, co drugi dzień)
+        # Zakładamy start symulacji = godzina 0
+        curr = start_h
+        while curr <= end_h:
+            day_num = curr // 24
+            if day_num % 2 != 0:  # Co drugi dzień na szaro
+                # Początek paska
+                rel_x1 = (curr - start_h) / hour_range
+                # Koniec godziny
+                rel_x2 = (curr + 1 - start_h) / hour_range
 
-    # --- OŚ X (Wspólna) ---
+                px1 = target_rect.left + int(rel_x1 * target_rect.width)
+                px2 = target_rect.left + int(rel_x2 * target_rect.width)
+
+                # Clip
+                px1 = max(target_rect.left, min(target_rect.right, px1))
+                px2 = max(target_rect.left, min(target_rect.right, px2))
+
+                if px2 > px1:
+                    pygame.draw.rect(surface, LIGHT_GRAY_BG, (px1, target_rect.top, px2 - px1, target_rect.height))
+            curr += 1
+
+        pygame.draw.rect(surface, (200, 200, 200), target_rect, 1)
+
     start_hour = max(0, current_hour - n_points + 1)
     end_hour = current_hour
-    hour_range = end_hour - start_hour
+    hour_range = max(1, end_hour - start_hour)
 
-    if hour_range <= 0: hour_range = 1
+    draw_bg(rect_int, start_hour, end_hour)
+    draw_bg(rect_dep, start_hour, end_hour)
+    draw_bg(rect_flow, start_hour, end_hour)
 
-    # Dynamiczna podziałka X
+    font_title = pygame.font.SysFont(None, 18, bold=True)
+    font_label = pygame.font.SysFont(None, 14)
+    font_unit = pygame.font.SysFont(None, 14, bold=True)
+
+    # === OŚ X (Wspólna - rysowana tylko na dole) ===
     if hour_range < 24:
         step_x = 2
     elif hour_range < 48:
@@ -188,119 +213,131 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     first_tick = (start_hour // step_x) * step_x
     if first_tick < start_hour: first_tick += step_x
 
-    current_tick = first_tick
-    while current_tick <= end_hour:
-        rel_pos = (current_tick - start_hour) / hour_range
+    curr_tick = first_tick
+    while curr_tick <= end_hour:
+        rel_pos = (curr_tick - start_hour) / hour_range
         px = rect_flow.left + int(rel_pos * rect_flow.width)
 
-        # Linie siatki pionowej
-        pygame.draw.line(surface, (240, 240, 240), (px, rect_rain.top), (px, rect_rain.bottom), 1)
-        pygame.draw.line(surface, (240, 240, 240), (px, rect_flow.top), (px, rect_flow.bottom), 1)
+        # Linie pionowe przez wszystkie wykresy
+        col_grid = (235, 235, 235)
+        pygame.draw.line(surface, col_grid, (px, rect_int.top), (px, rect_int.bottom), 1)
+        pygame.draw.line(surface, col_grid, (px, rect_dep.top), (px, rect_dep.bottom), 1)
+        pygame.draw.line(surface, col_grid, (px, rect_flow.top), (px, rect_flow.bottom), 1)
 
-        # Etykieta na dole
-        pygame.draw.line(surface, BLACK, (px, rect_flow.bottom), (px, rect_flow.bottom + 5), 1)
-        lbl = font_label.render(str(current_tick), True, BLACK)
-        surface.blit(lbl, (px - lbl.get_width() // 2, rect_flow.bottom + 8))
+        # Tick i etykieta na dole
+        pygame.draw.line(surface, BLACK, (px, rect_flow.bottom), (px, rect_flow.bottom + 4), 1)
+        lbl = font_label.render(str(curr_tick), True, BLACK)
+        surface.blit(lbl, (px - lbl.get_width() // 2, rect_flow.bottom + 6))
 
-        # Opcjonalnie: Tick na wykresie deszczu
-        pygame.draw.line(surface, BLACK, (px, rect_rain.bottom), (px, rect_rain.bottom + 5), 1)
+        curr_tick += step_x
 
-        current_tick += step_x
+    lbl_x = font_unit.render("Czas symulacji [h]", True, BLACK)
+    surface.blit(lbl_x, (rect_flow.centerx - lbl_x.get_width() // 2, rect_flow.bottom + 20))
 
-    # Opis osi X
-    lbl_x_unit = font_unit.render("Czas symulacji [h]", True, BLACK)
-    surface.blit(lbl_x_unit, (rect_flow.centerx - lbl_x_unit.get_width() // 2, rect_flow.bottom + 25))
+    # --- Funkcja pomocnicza do mapowania Y ---
+    def draw_y_grid(r, max_v, steps=4, format_str="{:.1f}"):
+        for i in range(steps + 1):
+            val = max_v * (i / steps)
+            y = r.bottom - int((val / max_v) * r.height)
+            pygame.draw.line(surface, (235, 235, 235), (r.left, y), (r.right, y))
+            lbl = font_label.render(format_str.format(val), True, GRAY)
+            surface.blit(lbl, (r.left - lbl.get_width() - 5, y - lbl.get_height() // 2))
 
-    # === WYKRES 1: DESZCZ (GÓRNY) ===
-    # Tytuł i Jednostka
-    surface.blit(font_title.render("Opady", True, BLACK), (rect_rain.left, rect_rain.top - 20))
-    surface.blit(font_unit.render("[mm/h]", True, BLACK), (rect_rain.left - 45, rect_rain.top + 20))
+    # === WYKRES 1: INTENSYWNOŚĆ (INT) ===
+    vals_int = [v for _, v in points_rain_int]
+    max_int = max(10.0, max(vals_int) * 1.2) if vals_int else 10.0
 
-    # Skala Y Deszczu
-    rain_vals = [v for _, v in points_rain]
-    max_rain = max(10.0, max(rain_vals) * 1.2) if rain_vals else 10.0
+    surface.blit(font_title.render("Intensywność", True, BLACK), (rect_int.left, rect_int.top - 18))
+    surface.blit(font_unit.render("[mm/h]", True, DARK_BLUE), (rect_int.left - 45, rect_int.top))
 
-    # Siatka Y Deszczu (3 linie) - RYSOWANA OD DOŁU
-    for i in range(4):
-        val = max_rain * (i / 3.0)
-        # 0 na dole (bottom), max na górze (top)
-        py = rect_rain.bottom - int((val / max_rain) * rect_rain.height)
+    draw_y_grid(rect_int, max_int)
 
-        pygame.draw.line(surface, (230, 230, 230), (rect_rain.left, py), (rect_rain.right, py))
-        lbl = font_label.render(f"{val:.1f}", True, GRAY)
-        surface.blit(lbl, (rect_rain.left - lbl.get_width() - 5, py - lbl.get_height() // 2))
-
-    # Rysowanie danych deszczu (Słupki od dołu)
     if n_points > 1:
-        for i, (_, val) in enumerate(points_rain):
+        for i, (_, val) in enumerate(points_rain_int):
             rel_x = i / (n_points - 1)
-            px = rect_rain.left + int(rel_x * rect_rain.width)
-            h = int((val / max_rain) * rect_rain.height)
+            px = rect_int.left + int(rel_x * rect_int.width)
+            h = int((val / max_int) * rect_int.height)
             if h > 0:
-                # Rysujemy od dołu w górę
-                pygame.draw.line(surface, DARK_BLUE, (px, rect_rain.bottom), (px, rect_rain.bottom - h), 2)
+                pygame.draw.line(surface, DARK_BLUE, (px, rect_int.bottom), (px, rect_int.bottom - h), 2)
 
-    # === WYKRES 2: PRZEPŁYWY (DOLNY) ===
-    # Tytuł i Jednostka
-    surface.blit(font_title.render("Przepływ", True, BLACK), (rect_flow.left, rect_flow.top - 20))
-    surface.blit(font_unit.render("[m3/h]", True, BLACK), (rect_flow.left - 45, rect_flow.top + 20))
+    # === WYKRES 2: GŁĘBOKOŚĆ (DEPTH) ===
+    vals_dep = [v for _, v in points_rain_dep]
+    max_dep = max(10.0, max(vals_dep) * 1.1) if vals_dep else 10.0
 
-    # Skala Y Przepływów
-    flow_est_vals = [v for _, v in points_est]
-    flow_div_vals = [v for _, v in points_div]
-    all_flows = flow_est_vals + flow_div_vals
-    if max_capacity: all_flows.append(max_capacity)
+    surface.blit(font_title.render("Suma opadów", True, BLACK), (rect_dep.left, rect_dep.top - 18))
+    surface.blit(font_unit.render("[mm]", True, DARK_CYAN), (rect_dep.left - 45, rect_dep.top))
 
-    # Dynamiczna skala
-    max_flow = max(100.0, max(all_flows) * 1.1)
+    draw_y_grid(rect_dep, max_dep)
 
-    # Siatka Y Przepływów (5 linii)
-    for i in range(5):
-        val = max_flow * (i / 4.0)
-        py = rect_flow.bottom - int((val / max_flow) * rect_flow.height)
-        pygame.draw.line(surface, (230, 230, 230), (rect_flow.left, py), (rect_flow.right, py))
-        lbl = font_label.render(f"{val:.0f}", True, GRAY)
-        surface.blit(lbl, (rect_flow.left - lbl.get_width() - 5, py - lbl.get_height() // 2))
+    if n_points > 1:
+        # Rysowanie jako wypełniony obszar (wielokąt)
+        poly_points = [(rect_dep.left, rect_dep.bottom)]
+        for i, (_, val) in enumerate(points_rain_dep):
+            rel_x = i / (n_points - 1)
+            px = rect_dep.left + int(rel_x * rect_dep.width)
+            py = rect_dep.bottom - int((val / max_dep) * rect_dep.height)
+            poly_points.append((px, py))
+        poly_points.append((rect_dep.right, rect_dep.bottom))
 
-    # Linia Max Capacity
+        if len(poly_points) > 2:
+            pygame.draw.polygon(surface, (180, 240, 240), poly_points)  # Wypełnienie
+            pygame.draw.lines(surface, DARK_CYAN, False, poly_points[1:-1], 2)  # Obrys
+
+    # === WYKRES 3: PRZEPŁYWY (FLOW) ===
+    vals_est = [v for _, v in points_est]
+    vals_div = [v for _, v in points_div]
+    all_f = vals_est + vals_div
+    if max_capacity: all_f.append(max_capacity)
+    max_flow = max(100.0, max(all_f) * 1.1) if all_f else 2000.0
+
+    surface.blit(font_title.render("Przepływ", True, BLACK), (rect_flow.left, rect_flow.top - 18))
+    surface.blit(font_unit.render("[m3/h]", True, BLACK), (rect_flow.left - 45, rect_flow.top))
+
+    draw_y_grid(rect_flow, max_flow, steps=5, format_str="{:.0f}")
+
+    # Linia limitu
     if max_capacity:
-        py_cap = rect_flow.bottom - int((max_capacity / max_flow) * rect_flow.height)
-        if rect_flow.top <= py_cap <= rect_flow.bottom:
-            pygame.draw.line(surface, RED, (rect_flow.left, py_cap), (rect_flow.right, py_cap), 1)
-            lbl_cap = font_label.render("Limit", True, RED)
-            surface.blit(lbl_cap, (rect_flow.right - lbl_cap.get_width() - 5, py_cap - 12))
-
-    # Funkcja mapująca punkt (i -> x, val -> y)
-    def get_pt(idx, val, r, max_v):
-        rel_x = idx / (n_points - 1) if n_points > 1 else 0
-        px = r.left + int(rel_x * r.width)
-        py = r.bottom - int((val / max_v) * r.height)
-        return px, py
+        y_cap = rect_flow.bottom - int((max_capacity / max_flow) * rect_flow.height)
+        if rect_flow.top <= y_cap <= rect_flow.bottom:
+            pygame.draw.line(surface, RED, (rect_flow.left, y_cap), (rect_flow.right, y_cap), 1)
+            lbl = font_label.render("Limit", True, RED)
+            surface.blit(lbl, (rect_flow.right - lbl.get_width() - 5, y_cap - 12))
 
     # Rysowanie linii Est (Oczyszczalnia)
     if n_points > 1:
-        pts_est = [get_pt(i, v, rect_flow, max_flow) for i, (_, v) in enumerate(points_est)]
-        pygame.draw.lines(surface, BLUE, False, pts_est, 2)
+        pts_est = []
+        pts_div = []
+        for i in range(n_points):
+            rel_x = i / (n_points - 1)
+            px = rect_flow.left + int(rel_x * rect_flow.width)
 
-        # Rysowanie linii Div (Przelew) - jeśli są jakiekolwiek wartości
+            v_est = points_est[i][1]
+            py_est = rect_flow.bottom - int((v_est / max_flow) * rect_flow.height)
+            pts_est.append((px, py_est))
+
+            v_div = points_div[i][1]
+            if v_div > 0:  # Tylko jeśli > 0
+                py_div = rect_flow.bottom - int((v_div / max_flow) * rect_flow.height)
+                pts_div.append((px, py_div))
+            else:
+                # Przerwa w linii, jeśli 0?
+                # Dla uproszczenia rysujemy 0 na dole
+                pts_div.append((px, rect_flow.bottom))
+
+        pygame.draw.lines(surface, BLUE, False, pts_est, 2)
         if any(v > 0 for _, v in points_div):
-            pts_div = [get_pt(i, v, rect_flow, max_flow) for i, (_, v) in enumerate(points_div)]
             pygame.draw.lines(surface, ORANGE, False, pts_div, 2)
 
-    # Legenda (wewnątrz wykresu przepływów)
-    leg_x = rect_flow.right - 120
-    leg_y = rect_flow.top + 10
-
-    # Oczyszczalnia
-    pygame.draw.line(surface, BLUE, (leg_x, leg_y), (leg_x + 20, leg_y), 2)
-    surface.blit(font_label.render("Oczyszczalnia", True, BLACK), (leg_x + 25, leg_y - 5))
-
-    # Przelew
-    pygame.draw.line(surface, ORANGE, (leg_x, leg_y + 20), (leg_x + 20, leg_y + 20), 2)
-    surface.blit(font_label.render("Przelew", True, BLACK), (leg_x + 25, leg_y + 15))
+    # Legenda
+    lx = rect_flow.right - 120
+    ly = rect_flow.top + 10
+    pygame.draw.line(surface, BLUE, (lx, ly), (lx + 20, ly), 2)
+    surface.blit(font_label.render("Oczyszczalnia", True, BLACK), (lx + 25, ly - 5))
+    pygame.draw.line(surface, ORANGE, (lx, ly + 20), (lx + 20, ly + 20), 2)
+    surface.blit(font_label.render("Przelew", True, BLACK), (lx + 25, ly + 15))
 
 
-# ====== Rysowanie mapy (Bez zmian) ======
+# ====== Rysowanie mapy ======
 def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: threading.Lock):
     if not hasattr(draw_map, "_bg"):
         draw_map._bg = pygame.image.load(MAP_IMAGE).convert()
@@ -331,7 +368,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         y = rect.top + oy + int((y0 - rect.top) * s)
         return x, y
 
-    # 1. Rysowanie połączeń (strzałek)
+    # 1. Połączenia
     for (start_loc, end_loc, flow) in connections:
         sx, sy = apply_view(*start_loc)
         ex, ey = apply_view(*end_loc)
@@ -342,11 +379,10 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     font = pygame.font.SysFont(None, 16)
     font_small = pygame.font.SysFont(None, 14)
 
-    # 1.5. Extra points (nieaktywne)
+    # 1.5 Extra Points
     for pid, lat, lon in extra_points:
         x, y = apply_view(lat, lon)
         pygame.draw.circle(surface, (180, 180, 180), (x, y), 5)
-        # Nazwa punktu
         lbl = font_small.render(str(pid), True, (100, 100, 100))
         surface.blit(lbl, (x + 6, y - 6))
 
@@ -355,11 +391,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     for sid, lat, lon, flow, status in sensors:
         x, y = apply_view(lat, lon)
         color = GREEN if status == "NORMAL" else RED
-
-        # Tylko kółko w kolorze statusu
         pygame.draw.circle(surface, color, (x, y), SENSOR_RADIUS)
-
-        # Etykieta
         lbl = font.render(f"{sid}", True, BLACK)
         surface.blit(lbl, (x + 8, y - 8))
         lbl_flow = font.render(f"{flow:.0f}", True, (50, 50, 50))
@@ -379,7 +411,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         lbl = font.render(f"KP26: {diverted:.0f}", True, BLACK)
         surface.blit(lbl, (x + 12, y - 5))
 
-    # 4. Oczyszczalnia (Kwadrat)
+    # 4. Oczyszczalnia
     if plant:
         plat, plon, est = plant
         x, y = apply_view(plat, plon)
@@ -398,8 +430,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         elif est > nom:
             p_col = YELLOW
 
-        if est > hyd:
-            draw_blob(surface, x, y, 50, BROWN, alpha=100)
+        if est > hyd: draw_blob(surface, x, y, 50, BROWN, alpha=100)
 
         # IKONA OCZYSZCZALNI
         PLANT_RADIUS = 12
@@ -414,10 +445,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
         bar_h = 36
         bar_w = 8
         fill_pct = min(1.0, est / (hyd * 1.2))
-
-        bx = x + PLANT_RADIUS + 6
-        by = y - (bar_h // 2)
-
+        bx, by = x + PLANT_RADIUS + 6, y - (bar_h // 2)
         pygame.draw.rect(surface, WHITE, (bx, by, bar_w, bar_h))
         pygame.draw.rect(surface, BLACK, (bx, by, bar_w, bar_h), 1)
         fill_h = int(fill_pct * bar_h)
@@ -425,84 +453,61 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
 
         # Etykieta pod ikoną
         lbl_ocz = font.render(f"OCZ: {est:.0f}", True, BLACK)
-        lbl_x = x - (lbl_ocz.get_width() // 2)
-        lbl_y = y + PLANT_RADIUS + 4
-        surface.blit(lbl_ocz, (lbl_x, lbl_y))
+        surface.blit(lbl_ocz, (x - (lbl_ocz.get_width() // 2), y + PLANT_RADIUS + 4))
 
     surface.set_clip(None)
     pygame.draw.rect(surface, GRAY, rect, 2, border_radius=12)
 
-    # 5. Panel informacyjny (HUD) na mapie - DESZCZ
-    hud_w, hud_h = 160, 110
+    # === 5. HUD DESZCZU (ZMODYFIKOWANY: DWA SUWAKI) ===
+    hud_w, hud_h = 180, 130
     hud_x, hud_y = rect.right - hud_w - 20, rect.top + 20
 
-    # Tło panelu
     pygame.draw.rect(surface, (255, 255, 255, 230), (hud_x, hud_y, hud_w, hud_h), border_radius=8)
     pygame.draw.rect(surface, GRAY, (hud_x, hud_y, hud_w, hud_h), 1, border_radius=8)
 
     r_int = rain.get("intensity", 0.0)
     r_dep = rain.get("depth", 0.0)
 
-    # --- TEXT (Lewa strona) ---
     title_f = pygame.font.SysFont(None, 20, bold=True)
-    val_f = pygame.font.SysFont(None, 18)
+    val_f = pygame.font.SysFont(None, 14)  # Mniejsza czcionka dla etykiet
 
-    surface.blit(title_f.render("Opady", True, BLACK), (hud_x + 10, hud_y + 10))
+    surface.blit(title_f.render("Warunki Pogodowe", True, BLACK), (hud_x + 10, hud_y + 10))
 
-    # Aktualne
-    lbl_cur = val_f.render(f"Akt.: {r_int:.1f}", True, BLACK)
-    surface.blit(lbl_cur, (hud_x + 10, hud_y + 35))
-    surface.blit(val_f.render("mm/h", True, GRAY), (hud_x + 10, hud_y + 50))
+    # Funkcja rysująca pojedynczy pasek (gauge)
+    def draw_gauge(x, y, w, h, val, max_v, c_start, c_end, title, unit):
+        # Tytuł i wartość
+        surface.blit(val_f.render(title, True, BLACK), (x, y))
+        val_txt = f"{val:.1f} {unit}"
+        surface.blit(val_f.render(val_txt, True, BLACK), (x + w - 50, y))  # Wartość po prawej
 
-    # Sumaryczne
-    lbl_sum = val_f.render(f"Sum.: {r_dep:.1f}", True, BLACK)
-    surface.blit(lbl_sum, (hud_x + 10, hud_y + 70))
-    surface.blit(val_f.render("mm", True, GRAY), (hud_x + 10, hud_y + 85))
+        # Pasek
+        bar_y = y + 20
+        pygame.draw.rect(surface, WHITE, (x, bar_y, w, h))
 
-    # --- SUWAK / GAUGE (Prawa strona) ---
-    bar_x = hud_x + 100
-    bar_y = hud_y + 15
-    bar_w = 15
-    bar_h = 80
-    max_val = 40.0
+        # Gradient
+        for i in range(w):
+            t = i / w
+            r = int(c_start[0] + (c_end[0] - c_start[0]) * t)
+            g = int(c_start[1] + (c_end[1] - c_start[1]) * t)
+            b = int(c_start[2] + (c_end[2] - c_start[2]) * t)
+            pygame.draw.line(surface, (r, g, b), (x + i, bar_y), (x + i, bar_y + h))
 
-    # 1. Rysowanie Gradientu (AliceBlue -> Navy)
-    c_start = (240, 248, 255)
-    c_end = (0, 0, 128)
+        pygame.draw.rect(surface, BLACK, (x, bar_y, w, h), 1)
 
-    for i in range(bar_h):
-        t = i / bar_h
-        r = int(c_start[0] + (c_end[0] - c_start[0]) * t)
-        g = int(c_start[1] + (c_end[1] - c_start[1]) * t)
-        b = int(c_start[2] + (c_end[2] - c_start[2]) * t)
+        # Trójkąt wskaźnika
+        pct = max(0.0, min(1.0, val / max_v))
+        tx = x + int(pct * w)
+        tri_pts = [(tx, bar_y + h), (tx - 5, bar_y + h + 6), (tx + 5, bar_y + h + 6)]
+        pygame.draw.polygon(surface, RED, tri_pts)
+        pygame.draw.polygon(surface, BLACK, tri_pts, 1)
 
-        line_y = bar_y + bar_h - i
-        pygame.draw.line(surface, (r, g, b), (bar_x, line_y), (bar_x + bar_w, line_y))
+    # 1. Gauge Intensywności (mm/h)
+    draw_gauge(hud_x + 10, hud_y + 35, 160, 10, r_int, 40.0,
+               (240, 248, 255), (0, 0, 128), "Intensywność", "mm/h")
 
-    pygame.draw.rect(surface, BLACK, (bar_x, bar_y, bar_w, bar_h), 1)
-
-    # 2. Znaczniki (Progi) po prawej
-    font_tiny = pygame.font.SysFont(None, 14)
-    steps = [0, 10, 20, 30, 40]
-    for val in steps:
-        pct = val / max_val
-        py = bar_y + bar_h - int(pct * bar_h)
-        pygame.draw.line(surface, BLACK, (bar_x + bar_w, py), (bar_x + bar_w + 4, py))
-        lbl = font_tiny.render(str(val), True, BLACK)
-        surface.blit(lbl, (bar_x + bar_w + 6, py - 4))
-
-    # 3. Trójkącik wskaźnika
-    curr_val = max(0.0, min(max_val, r_int))
-    curr_pct = curr_val / max_val
-    curr_y = bar_y + bar_h - int(curr_pct * bar_h)
-
-    tri_pts = [
-        (bar_x, curr_y),
-        (bar_x - 6, curr_y - 4),
-        (bar_x - 6, curr_y + 4)
-    ]
-    pygame.draw.polygon(surface, RED, tri_pts)
-    pygame.draw.polygon(surface, BLACK, tri_pts, 1)
+    # 2. Gauge Głębokości (mm)
+    draw_gauge(hud_x + 10, hud_y + 80, 160, 10, r_dep, 60.0,
+               (220, 255, 255), (0, 100, 100), "Suma opadów", "mm")
 
 
 # ====== UI CONTROLS ======
@@ -531,14 +536,12 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     mouse_pos = pygame.mouse.get_pos()
     is_paused = pause_evt.is_set()
 
-    # Reset
     btn_reset = pygame.Rect(panel_rect.left + 20, panel_rect.centery - 15, 30, 30)
     col_reset = BUTTON_HOVER if btn_reset.collidepoint(mouse_pos) else UI_BG
     pygame.draw.rect(surface, col_reset, btn_reset, border_radius=5)
     pygame.draw.rect(surface, BLACK, btn_reset, 2, border_radius=5)
     pygame.draw.rect(surface, RED, (btn_reset.centerx - 6, btn_reset.centery - 6, 12, 12))
 
-    # Play/Pause
     btn_play = pygame.Rect(panel_rect.left + 65, panel_rect.centery - 20, 40, 40)
     col_play = BUTTON_HOVER if btn_play.collidepoint(mouse_pos) else UI_BG
     pygame.draw.circle(surface, col_play, btn_play.center, 20)
@@ -553,7 +556,6 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
         pygame.draw.rect(surface, BLACK, (btn_play.centerx - 6, btn_play.centery - 8, 4, 16))
         pygame.draw.rect(surface, BLACK, (btn_play.centerx + 2, btn_play.centery - 8, 4, 16))
 
-    # Slider
     slider_val = shared.get("ui_slider_val", 0.5)
     slider_rect = pygame.Rect(panel_rect.left + 130, panel_rect.centery - 4, 180, 8)
     pygame.draw.rect(surface, SLIDER_BG, slider_rect, border_radius=4)
@@ -569,7 +571,6 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
     surface.blit(font_small.render("Wolno", True, GRAY), (slider_rect.left, slider_rect.bottom + 5))
     surface.blit(font_small.render("Szybko", True, GRAY), (slider_rect.right - 35, slider_rect.bottom + 5))
 
-    # Status
     hour = shared.get("hour", 0)
     max_h = shared.get("max_hours", 168)
     font_status = pygame.font.SysFont(None, 24, bold=True)

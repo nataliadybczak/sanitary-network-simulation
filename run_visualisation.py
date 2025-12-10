@@ -117,14 +117,17 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
     place_window(*pos)
     pygame.init()
     pygame.display.set_caption("SewerSystem — CHART & RAIN")
-    WIN_W, WIN_H = 900, 650
+
+    # ZWIĘKSZONA WYSOKOŚĆ OKNA DLA 3 WYKRESÓW
+    WIN_W, WIN_H = 900, 900
     CHART_ONLY_RECT = pygame.Rect(12, 12, WIN_W - 24, WIN_H - 24)
 
     screen = pygame.display.set_mode((WIN_W, WIN_H))
     clock = pygame.time.Clock()
 
     points_est, points_div = deque(maxlen=CHART_MAX_POINTS), deque(maxlen=CHART_MAX_POINTS)
-    points_rain = deque(maxlen=CHART_MAX_POINTS)
+    points_rain_int = deque(maxlen=CHART_MAX_POINTS)
+    points_rain_dep = deque(maxlen=CHART_MAX_POINTS)
     last_hour_check = -1
 
     running = True
@@ -143,25 +146,34 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
         with lock:
             pt = shared.get("point")
             max_capacity = shared.get("max_capacity")
-            rain_data = shared.get("rain", {"depth": 0.0})
+            rain_data = shared.get("rain", {})
             hour = shared.get("hour", 0)
 
         # Wykrywanie RESETU
         if hour < last_hour_check:
             points_est.clear();
-            points_div.clear();
-            points_rain.clear()
+            points_div.clear()
+            points_rain_int.clear();
+            points_rain_dep.clear()
         last_hour_check = hour
 
         if pt is not None:
             ts, est, div = pt
+            # Dodajemy tylko unikalne punkty czasowe
             if not points_est or points_est[-1][0] != ts:
                 points_est.append((ts, est))
                 points_div.append((ts, div))
-                points_rain.append((ts, rain_data.get("depth", 0.0)))
 
-        # Przekazujemy 'hour' do funkcji rysującej
-        draw_chart(screen, CHART_ONLY_RECT, points_est, points_div, points_rain, max_capacity, hour)
+                # Pobieranie danych o deszczu (Intensywność i Głębokość)
+                r_int = rain_data.get("intensity", 0.0)
+                r_dep = rain_data.get("depth", 0.0)
+
+                points_rain_int.append((ts, r_int))
+                points_rain_dep.append((ts, r_dep))
+
+        # Przekazujemy wszystkie dane do nowej funkcji rysującej 3 wykresy
+        draw_chart(screen, CHART_ONLY_RECT, points_est, points_div,
+                   points_rain_int, points_rain_dep, max_capacity, hour)
 
         pygame.display.flip()
         clock.tick(FPS)
@@ -227,6 +239,5 @@ def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file 
 
 if __name__ == "__main__":
     print("\n=== Symulacja rozpoczęta ===")
-    # run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL, rain_file="data/rain_experiments/realistic.csv")
-    run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL)
+    run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL) # rain_file można tu dodać
     print("\n=== Symulacja zakończona ===")
