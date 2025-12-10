@@ -225,6 +225,12 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
         pygame.draw.line(surface, col_grid, (px, rect_flow.top), (px, rect_flow.bottom), 1)
 
         # Tick i etykieta na dole
+        pygame.draw.line(surface, BLACK, (px, rect_int.bottom), (px, rect_int.bottom + 4), 1)
+        lbl = font_label.render(str(curr_tick), True, BLACK)
+        surface.blit(lbl, (px - lbl.get_width() // 2, rect_int.bottom + 6))
+        pygame.draw.line(surface, BLACK, (px, rect_dep.bottom), (px, rect_dep.bottom + 4), 1)
+        lbl = font_label.render(str(curr_tick), True, BLACK)
+        surface.blit(lbl, (px - lbl.get_width() // 2, rect_dep.bottom + 6))
         pygame.draw.line(surface, BLACK, (px, rect_flow.bottom), (px, rect_flow.bottom + 4), 1)
         lbl = font_label.render(str(curr_tick), True, BLACK)
         surface.blit(lbl, (px - lbl.get_width() // 2, rect_flow.bottom + 6))
@@ -248,7 +254,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     max_int = max(10.0, max(vals_int) * 1.2) if vals_int else 10.0
 
     surface.blit(font_title.render("Intensywność", True, BLACK), (rect_int.left, rect_int.top - 18))
-    surface.blit(font_unit.render("[mm/h]", True, DARK_BLUE), (rect_int.left - 45, rect_int.top))
+    surface.blit(font_unit.render("[mm/h]", True, DARK_BLUE), (rect_int.left - 45, rect_int.top + 10))
 
     draw_y_grid(rect_int, max_int)
 
@@ -264,8 +270,8 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     vals_dep = [v for _, v in points_rain_dep]
     max_dep = max(10.0, max(vals_dep) * 1.1) if vals_dep else 10.0
 
-    surface.blit(font_title.render("Suma opadów", True, BLACK), (rect_dep.left, rect_dep.top - 18))
-    surface.blit(font_unit.render("[mm]", True, DARK_CYAN), (rect_dep.left - 45, rect_dep.top))
+    surface.blit(font_title.render("Poziom deszczu (na ziemi)", True, BLACK), (rect_dep.left, rect_dep.top - 18))
+    surface.blit(font_unit.render("[mm]", True, DARK_CYAN), (rect_dep.left - 45, rect_dep.top + 10))
 
     draw_y_grid(rect_dep, max_dep)
 
@@ -291,7 +297,7 @@ def draw_chart(surface: pygame.Surface, rect: pygame.Rect, points_est: deque, po
     max_flow = max(100.0, max(all_f) * 1.1) if all_f else 2000.0
 
     surface.blit(font_title.render("Przepływ", True, BLACK), (rect_flow.left, rect_flow.top - 18))
-    surface.blit(font_unit.render("[m3/h]", True, BLACK), (rect_flow.left - 45, rect_flow.top))
+    surface.blit(font_unit.render("[m3/h]", True, BLACK), (rect_flow.left - 45, rect_flow.top + 10))
 
     draw_y_grid(rect_flow, max_flow, steps=5, format_str="{:.0f}")
 
@@ -471,7 +477,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
     title_f = pygame.font.SysFont(None, 20, bold=True)
     val_f = pygame.font.SysFont(None, 14)  # Mniejsza czcionka dla etykiet
 
-    surface.blit(title_f.render("Warunki Pogodowe", True, BLACK), (hud_x + 10, hud_y + 10))
+    surface.blit(title_f.render("Opady deszczu", True, BLACK), (hud_x + 10, hud_y + 10))
 
     # Funkcja rysująca pojedynczy pasek (gauge)
     def draw_gauge(x, y, w, h, val, max_v, c_start, c_end, title, unit):
@@ -507,7 +513,7 @@ def draw_map(surface: pygame.Surface, rect: pygame.Rect, shared: Dict, lock: thr
 
     # 2. Gauge Głębokości (mm)
     draw_gauge(hud_x + 10, hud_y + 80, 160, 10, r_dep, 60.0,
-               (220, 255, 255), (0, 100, 100), "Suma opadów", "mm")
+               (220, 255, 255), (0, 100, 100), "Poziom deszczu", "mm")
 
 
 # ====== UI CONTROLS ======
