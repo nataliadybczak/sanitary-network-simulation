@@ -535,56 +535,115 @@ _ui_state = UIState()
 def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
                      pause_evt: threading.Event, stop_evt: threading.Event,
                      min_interval: float, max_interval: float):
-    panel_rect = pygame.Rect(rect.centerx - 250, rect.bottom - 70, 500, 60)
-    pygame.draw.rect(surface, UI_BG, panel_rect, border_radius=15)
-    pygame.draw.rect(surface, UI_BORDER, panel_rect, 2, border_radius=15)
+    """
+    Rysuje pasek kontrolny na dole ekranu (Zmodernizowany styl).
+    """
+    # Wymiary i pozycja panelu (nieco wyższy i szerszy dla czytelności)
+    panel_w, panel_h = 700, 85
+    panel_rect = pygame.Rect(rect.centerx - panel_w // 2, rect.bottom - panel_h - 20, panel_w, panel_h)
+
+    # Stylistyka zgodna z wykresami (Białe tło, szara ramka)
+    pygame.draw.rect(surface, LIGHT , panel_rect, border_radius=12)
+    pygame.draw.rect(surface, GRAY, panel_rect, 1, border_radius=12)  # Cieńsza ramka
 
     mouse_pos = pygame.mouse.get_pos()
     is_paused = pause_evt.is_set()
 
-    btn_reset = pygame.Rect(panel_rect.left + 20, panel_rect.centery - 15, 30, 30)
-    col_reset = BUTTON_HOVER if btn_reset.collidepoint(mouse_pos) else UI_BG
-    pygame.draw.rect(surface, col_reset, btn_reset, border_radius=5)
-    pygame.draw.rect(surface, BLACK, btn_reset, 2, border_radius=5)
-    pygame.draw.rect(surface, RED, (btn_reset.centerx - 6, btn_reset.centery - 6, 12, 12))
+    # Czcionki
+    font_ui = pygame.font.SysFont(None, 20)
+    font_bold = pygame.font.SysFont(None, 20, bold=True)
+    font_small = pygame.font.SysFont(None, 16)
 
-    btn_play = pygame.Rect(panel_rect.left + 65, panel_rect.centery - 20, 40, 40)
-    col_play = BUTTON_HOVER if btn_play.collidepoint(mouse_pos) else UI_BG
-    pygame.draw.circle(surface, col_play, btn_play.center, 20)
-    pygame.draw.circle(surface, BLACK, btn_play.center, 20, 2)
+    # === SEKCJA 1: PRZYCISKI (Lewa strona) ===
+    btn_w, btn_h = 80, 34
+    spacing = 15
+    start_x = panel_rect.left + 20
+    center_y = panel_rect.centery + 5  # lekkie przesunięcie w dół bo nad przyciskami nic nie ma
+
+    # Przycisk RESET
+    btn_reset = pygame.Rect(start_x, center_y - btn_h // 2, btn_w, btn_h)
+    col_reset = LIGHT if btn_reset.collidepoint(mouse_pos) else WHITE
+
+    pygame.draw.rect(surface, col_reset, btn_reset, border_radius=6)
+    pygame.draw.rect(surface, GRAY, btn_reset, 1, border_radius=6)
+
+    # Ikonka i tekst Reset
+    pygame.draw.rect(surface, RED, (btn_reset.left + 10, btn_reset.centery - 4, 8, 8))
+    lbl_reset = font_ui.render("Reset", True, BLACK)
+    surface.blit(lbl_reset, (btn_reset.left + 26, btn_reset.centery - lbl_reset.get_height() // 2))
+
+    # Przycisk PLAY/PAUSE
+    btn_play = pygame.Rect(btn_reset.right + spacing, center_y - btn_h // 2, btn_w, btn_h)
+    col_play = LIGHT if btn_play.collidepoint(mouse_pos) else WHITE
+
+    pygame.draw.rect(surface, col_play, btn_play, border_radius=6)
+    pygame.draw.rect(surface, GRAY, btn_play, 1, border_radius=6)
 
     if is_paused:
-        pts = [(btn_play.centerx - 5, btn_play.centery - 8),
-               (btn_play.centerx - 5, btn_play.centery + 8),
-               (btn_play.centerx + 8, btn_play.centery)]
+        # Ikonka Play (Trójkąt)
+        pts = [(btn_play.left + 12, btn_play.centery - 5),
+               (btn_play.left + 12, btn_play.centery + 5),
+               (btn_play.left + 20, btn_play.centery)]
         pygame.draw.polygon(surface, GREEN, pts)
+        lbl_play = font_ui.render("Start", True, BLACK)
     else:
-        pygame.draw.rect(surface, BLACK, (btn_play.centerx - 6, btn_play.centery - 8, 4, 16))
-        pygame.draw.rect(surface, BLACK, (btn_play.centerx + 2, btn_play.centery - 8, 4, 16))
+        # Ikonka Pauza (Dwie kreski)
+        pygame.draw.rect(surface, BLACK, (btn_play.left + 12, btn_play.centery - 5, 3, 10))
+        pygame.draw.rect(surface, BLACK, (btn_play.left + 17, btn_play.centery - 5, 3, 10))
+        lbl_play = font_ui.render("Pauza", True, BLACK)
+
+    surface.blit(lbl_play, (btn_play.left + 28, btn_play.centery - lbl_play.get_height() // 2))
+
+    # === SEKCJA 2: SUWAK PRĘDKOŚCI (Środek) ===
+    slider_x = btn_play.right + 40
+    slider_w = 280
+    slider_y = panel_rect.centery + 8
+
+    # Etykieta nad suwakiem
+    lbl_speed_title = font_bold.render("Prędkość symulacji", True, BLACK)
+    surface.blit(lbl_speed_title, (slider_x + slider_w // 2 - lbl_speed_title.get_width() // 2, panel_rect.top + 15))
+
+    # Pasek suwaka
+    slider_rect = pygame.Rect(slider_x, slider_y, slider_w, 6)
+    pygame.draw.rect(surface, (220, 220, 220), slider_rect, border_radius=3)  # Tło paska
 
     slider_val = shared.get("ui_slider_val", 0.5)
-    slider_rect = pygame.Rect(panel_rect.left + 130, panel_rect.centery - 4, 180, 8)
-    pygame.draw.rect(surface, SLIDER_BG, slider_rect, border_radius=4)
     handle_x = slider_rect.left + int(slider_val * slider_rect.width)
+
+    # Wypełnienie aktywne (niebieskie)
     fill_rect = pygame.Rect(slider_rect.left, slider_rect.top, handle_x - slider_rect.left, slider_rect.height)
-    pygame.draw.rect(surface, SLIDER_FILL, fill_rect, border_radius=4)
+    pygame.draw.rect(surface, DARK_BLUE, fill_rect, border_radius=3)
 
+    # Uchwyt
     handle_rect = pygame.Rect(handle_x - 8, slider_rect.centery - 8, 16, 16)
-    pygame.draw.circle(surface, BLUE, handle_rect.center, 8)
-    pygame.draw.circle(surface, BLACK, handle_rect.center, 8, 1)
+    pygame.draw.circle(surface, WHITE, handle_rect.center, 8)
+    pygame.draw.circle(surface, DARK_BLUE, handle_rect.center, 8, 3)  # Obrys niebieski
 
-    font_small = pygame.font.SysFont(None, 16)
-    surface.blit(font_small.render("Wolno", True, GRAY), (slider_rect.left, slider_rect.bottom + 5))
-    surface.blit(font_small.render("Szybko", True, GRAY), (slider_rect.right - 35, slider_rect.bottom + 5))
+    # Podpisy pod suwakiem (z wartościami liczbowymi)
+    # Wolno = max_interval, Szybko = min_interval
+    lbl_slow = font_small.render(f"Wolno ({max_interval}s)", True, GRAY)
+    lbl_fast = font_small.render(f"Szybko ({min_interval}s)", True, GRAY)
 
+    surface.blit(lbl_slow, (slider_rect.left, slider_rect.bottom + 5))
+    surface.blit(lbl_fast, (slider_rect.right - lbl_fast.get_width(), slider_rect.bottom + 5))
+
+    # === SEKCJA 3: CZAS (Prawa strona) ===
+    time_x = slider_rect.right + 40
+
+    # Etykieta górna
+    lbl_time_title = font_bold.render("Czas symulacji", True, BLACK)
+    surface.blit(lbl_time_title, (time_x, panel_rect.top + 15))
+
+    # Wartość dolna
     hour = shared.get("hour", 0)
     max_h = shared.get("max_hours", 168)
-    font_status = pygame.font.SysFont(None, 24, bold=True)
-    status_text = f"Godzina: {hour} / {max_h + 1}"
-    txt_surf = font_status.render(status_text, True, BLACK)
-    surface.blit(txt_surf,
-                 (panel_rect.right - 10 - txt_surf.get_width(), panel_rect.centery - txt_surf.get_height() // 2))
 
+    # Formatowanie z zerem wiodącym dla estetyki (opcjonalne)
+    time_str = f"{hour} / {max_h + 1} [h]"
+    lbl_time_val = font_ui.render(time_str, True, DARK_BLUE)  # Kolor akcentu
+    surface.blit(lbl_time_val, (time_x, panel_rect.centery + 5))
+
+    # === LOGIKA INTERAKCJI SUWAKA ===
     if _ui_state.dragging_slider:
         if not pygame.mouse.get_pressed()[0]:
             _ui_state.dragging_slider = False
@@ -592,6 +651,8 @@ def draw_control_bar(surface: pygame.Surface, rect: pygame.Rect, shared: Dict,
             mx = min(max(mouse_pos[0], slider_rect.left), slider_rect.right)
             new_val = (mx - slider_rect.left) / slider_rect.width
             shared["ui_slider_val"] = new_val
+
+            # Przelicz interwał
             new_interval = max_interval - new_val * (max_interval - min_interval)
             shared["sim_interval"] = new_interval
 
