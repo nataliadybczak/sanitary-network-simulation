@@ -1,6 +1,8 @@
 from visualisation.graphics_functions import *
 from model.model import SewerSystemModel
 from visualisation.simulation_engine import SimulationThread
+import sys
+import argparse
 
 # wyrzucenie komentarzy i warningów z Pygame
 import os
@@ -181,7 +183,15 @@ def chart_window_loop(shared, lock, pause_evt, stop_evt, pos=(980, 50)):
 
 
 # ====== Uruchomienie ======
-def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file = "data/rain.csv"):
+def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file: str = "data/rain.csv",
+                              max_hours: int = 168, max_interval: float = None, min_interval: float = None,
+                              max_capacity: int = 2000):
+    # if min_interval <= interval_sec <= max_interval:
+    #     if max_interval is not None:
+    #         MAX_INTERVAL = max_interval
+    #     if min_interval is not None:
+    #         MIN_INTERVAL = min_interval
+
     mp.set_start_method("spawn", force=True)
 
     manager = mp.Manager()
@@ -194,10 +204,10 @@ def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file 
         "rain": {"intensity": 0.0, "depth": 0.0},
         "connections": [],
         "extra_points": [],
-        "max_capacity": 1700,
+        "max_capacity": max_capacity,
         "running": True,
         "hour": 0,
-        "max_hours": 168,
+        "max_hours": max_hours,
         "reset_cmd": False,
         "sim_interval": interval_sec,
         "ui_slider_val": 0.5
@@ -209,7 +219,7 @@ def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file 
     pause_evt.set()
 
     def model_factory():
-        return SewerSystemModel(max_capacity=2000, max_hours=168, rain_file=rain_file)
+        return SewerSystemModel(max_capacity= max_capacity, max_hours=max_hours, rain_file=rain_file)
 
     temp_model = model_factory()
     shared["max_capacity"] = temp_model.max_capacity
@@ -237,8 +247,41 @@ def run_two_windows_dashboard(interval_sec: float = DEFAULT_INTERVAL, rain_file 
 
 
 if __name__ == "__main__":
+
+    print("\n=== Inicjalizacja Symulacji ===")
+
+    parser = argparse.ArgumentParser(description="Uruchomienie symulacji systemu kanalizacyjnego.")
+
+    parser.add_argument("--interval_sec", type=float, default=DEFAULT_INTERVAL,
+                        help=f"Domyślny krok symulacji w sekundach (domyślnie: {DEFAULT_INTERVAL})")
+    parser.add_argument("--rain_file", type=str, default="data/rain.csv",
+                        help="Ścieżka do pliku z danymi deszczowymi")
+    parser.add_argument("--max_hours", type=int, default=168,
+                        help="Czas trwania symulacji w godzinach")
+    parser.add_argument("--max_capacity", type=int, default=2000,
+                        help="Maksymalna przepustowość oczyszczalni")
+    # parser.add_argument("--min_interval", type=float, default=MIN_INTERVAL,
+    #                     help=f"Minimalny dozwolony interwał (domyślnie: {MIN_INTERVAL})")
+    # parser.add_argument("--max_interval", type=float, default=MAX_INTERVAL,
+    #                     help=f"Maksymalny dozwolony interwał (domyślnie: {MAX_INTERVAL})")
+
+    args = parser.parse_args()
+
     print("\n=== Symulacja rozpoczęta ===")
-    run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL) # konfiguracja rain_file i domyślnego interwału
-                                                                # co jaki jest krok robiony w symulacji
-                                                                # (czas rzeczywisty, nie parametr symulacji)
+    if len(sys.argv)>1:
+        # if args.min_interval <= args.interval_sec <= args.max_interval:
+        print("Z podanymi paramterami w linii poleceń")
+        run_two_windows_dashboard(
+            interval_sec=args.interval_sec,
+            rain_file=args.rain_file,
+            max_hours=args.max_hours -1,
+            max_capacity=args.max_capacity
+        )
+    else:
+        # konfiguracja rain_file i domyślnego interwału
+        # co jaki jest krok robiony w symulacji
+        # (czas rzeczywisty, nie parametr symulacji)
+        print("Z parametrami z pliku źródłowego")
+        run_two_windows_dashboard(interval_sec=DEFAULT_INTERVAL)
+
     print("\n=== Symulacja zakończona ===")
