@@ -5,7 +5,6 @@ import math
 import pandas as pd
 import os
 
-# Pomocnicze: obliczanie dystansu (chociaż chyba nie będzie potrzebne)
 def _calculate_distance(loc1, loc2):
     lat1, lon1 = loc1
     lat2, lon2 = loc2
@@ -32,7 +31,7 @@ class SewerSystemModel(Model):
             "G-T1": ["Oczyszczalnia"],
             "ŁPA-P1": ["KP8"],
             "LBT1": ["Oczyszczalnia"],
-            "M1": ["Oczyszczalnia"],
+            # "M1": ["Oczyszczalnia"], # chociaż i tak trzeba dodać spływ z Żywca
             }
         import os
         import pandas as pd
@@ -98,6 +97,9 @@ class SewerSystemModel(Model):
         self.nominal_capacity = 1700  # pełne oczyszczanie
         self.hydraulic_capacity = 2200  # maks. hydrauliczny odbiór
         self.warning_threshold = 2000  # po tym zaczynamy wykorzystywać przelew KP26
+
+        self.required_emergency_diversion = 0.0
+        self.diversion_candidates = {"KP16": 0.0, "KP25": 0.0}
 
         self.current_hour = 1
         self.running = True
@@ -241,6 +243,7 @@ class SewerSystemModel(Model):
             sensor.reset_buffers()
         self.plant.reset_buffers()
         self.overflow_point.reset_buffers()
+        self.kp26_split_factor = 0.0
 
         self.refresh_mean_flows_for_current_hour()
 
@@ -278,11 +281,11 @@ class SewerSystemModel(Model):
             total_in = self.plant.inflow_from_graph
             remaining = max(0.0, total_in - self.nominal_capacity - diverted)
 
-            print(f"OCZ → podsumowanie:")
-            print(f"  dopływ całkowity: {total_in:.2f}")
-            print(f"  nominal: {self.nominal_capacity}")
-            print(f"  przelew KP26: {diverted:.2f} m3/h")
-            print(f"  nadmiar NIEWYŁADOWANY: {remaining:.2f} m3/h")
+            # print(f"OCZ → podsumowanie:")
+            # print(f"  dopływ całkowity: {total_in:.2f}")
+            # print(f"  nominal: {self.nominal_capacity}")
+            # print(f"  przelew KP26: {diverted:.2f} m3/h")
+            # print(f"  nadmiar NIEWYŁADOWANY: {remaining:.2f} m3/h")
 
         # --- 5. Zebranie danych ---
         self.datacollector.collect(self)
@@ -291,3 +294,14 @@ class SewerSystemModel(Model):
         self.current_hour += 1
         if self.current_hour > self.max_hours:
             self.running = False
+
+        print("\n=== PODSUMOWANIE GODZINY ===")
+
+        print(f"Dopływ do oczyszczalni: {self.plant.inflow_from_graph:.2f} m3/h")
+        print(f"Oczyszczono: {self.plant.treated_this_hour:.2f} m3/h")
+        print(f"W retencji: {self.plant.retention_volume:.2f} m3")
+
+        print(f"Przelew KP26 aktywny: {self.overflow_point.active}")
+        print(f"Do rzeki: {self.overflow_point.diverted_flow:.2f} m3/h")
+
+        print("============================\n")

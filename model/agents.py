@@ -116,7 +116,7 @@ class BaseSensorAgent(Agent):
         # Specjalna logika TYLKO dla KP16 i KP25 (bo tylko one mogą iść do KP26):
         if self.location_id in ("KP16", "KP25") and "KP26" in self.downstream_ids and "KP2" in self.downstream_ids:
             # korzystamy z info z poprzedniej godziny:
-            f_kp26 = getattr(self.model, "kp26_split_factor", 0.0)
+            f_kp26 = max(0.0, min(getattr(self.model, "kp26_split_factor", 0.0), 1.0))
 
             if not self.model.overflow_point.active or f_kp26 <= 0.0:
                 # brak przeciążenia w poprzedniej godzinie → wszystko do KP2
@@ -150,7 +150,7 @@ class BaseSensorAgent(Agent):
 
 # === PRZELEW (KP26) ===
 class OverflowPointAgent(Agent):
-    def __init__(self, unique_id, model, location_id, location, capacity=float("inf")):
+    def __init__(self, unique_id, model, location_id, location, capacity=800):
         self.unique_id = unique_id
         self.model = model
         self.location_id = location_id
@@ -160,11 +160,13 @@ class OverflowPointAgent(Agent):
         self.inflow_from_graph = 0.0  # dopływ w tej godzinie
         self.active = False
         self.diverted_flow = 0.0      # ile realnie popłynęło do rzeki
+        self.unhandled_overflow = 0.0 # ile pozostało nieodprowadzone do rzeki
 
     def reset_buffers(self):
         self.inflow_from_graph = 0.0
         # self.active = False
         self.diverted_flow = 0.0
+        self.unhandled_overflow = 0.0
 
     def receive(self, flow_value: float):
         if flow_value > 0:
@@ -174,36 +176,88 @@ class OverflowPointAgent(Agent):
         # KP26 ma NIE działać jeśli oczyszczalnia nie zezwoliła:
         if not self.active:
             self.diverted_flow = 0.0
+            self.unhandled_overflow = 0.0
             return
 
         overflow = min(self.inflow_from_graph, self.capacity)
         self.diverted_flow = overflow
+        self.unhandled_overflow = max(0.0, self.inflow_from_graph - self.capacity)
 
         if overflow > 0:
             print(f"Punkt przelewowy {self.location_id} otwarty → do rzeki {overflow:.2f} m³/h")
 
+        print("\n--- PRZELEW KP26 ---")
+        print(f"Dopływ do przelewu: {self.inflow_from_graph:.2f} m3/h")
+        print(f"Odprowadzono do rzeki: {self.diverted_flow:.2f} m3/h")
+        print(f"Niewyładowany nadmiar: {self.unhandled_overflow:.2f} m3/h")
+        print("---------------------\n")
+
 
 # === OCZYSZCZALNIA ===
 class SewagePlantAgent(Agent):
-    def __init__(self, unique_id, model, max_capacity, location, normal_flow, k_rain_depth=0.0):
+    def __init__( self,
+        unique_id,
+        model,
+        max_capacity,
+        location,
+        normal_flow,
+        k_rain_depth=0.0,
+        nominal_capacity=1700.0,
+        accelerated_capacity=2200.0,
+        retention_capacity=1000.0,
+        retention_release_rate=100.0,
+        max_accelerated_hours=6
+    ):
+        # self.unique_id = unique_id
+        # self.model = model
+        # self.location = location
+        #
+        # self.max_capacity = max_capacity
+        # self.normal_flow = normal_flow
+        #
+        # # dopływ z grafu w tej godzinie
+        # self.inflow_from_graph = 0.0
+        # # szacowany dopływ
+        # self.estimated_flow = 0.0
         self.unique_id = unique_id
         self.model = model
         self.location = location
 
         self.max_capacity = max_capacity
         self.normal_flow = normal_flow
+        self.k_rain_depth = k_rain_depth
 
-        # dopływ z grafu w tej godzinie
-        self.inflow_from_graph = 0.0
-        # szacowany dopływ
-        self.estimated_flow = 0.0
+        self.nominal_capacity = nominal_capacity
+        self.accelerated_capacity = accelerated_capacity
 
-        # składnik deszczowy na końcu - opcjonalnie
+        # retencja
+        self.retention_capacity = retention_capacity
+        self.retention_release_rate = retention_release_rate
+        self.retention_volume = 0.0
+
+        # tryb przyspieszonej pracy oczyszczalni
+        self.max_accelerated_hours = max_accelerated_hours
+        self.accelerated_hours_streak = 0
+
+        # dane godzinowe
+        self.inflow_from_graph = 0.0 # dopływ z grafu w tej godzinie
+        self.estimated_flow = 0.0 # szacowany dopływ
+        self.retained_this_hour = 0.0 # ścieki przekierowane do retencji w danej godzinie
+        self.released_from_retention = 0.0 # ścieki, które zostały w danej godzinie przekierowane z retencji do oczyszcania
+        self.flooding_volume = 0.0 # przekroczony poziom (zalanie obszarów przy oczyszczalni)
+        self.status = "NORMAL"
+        self.warning_code = None
+
         self.k_rain_depth = k_rain_depth
 
     def reset_buffers(self):
         self.inflow_from_graph = 0.0
         self.estimated_flow = 0.0
+        self.retained_this_hour = 0.0
+        self.released_from_retention = 0.0
+        self.flooding_volume = 0.0
+        self.status = "NORMAL"
+        self.warning_code = None
 
     def receive(self, flow_value: float):
         if flow_value > 0:
@@ -211,88 +265,200 @@ class SewagePlantAgent(Agent):
 
     def step(self):
         """
-        Logika oparta na 5 progach:
-          - nominal_capacity         – normalna praca
-          - warning_threshold        – przeciążenie, ale bez przelewu
-          - hydraulic_capacity       – maksymalny ciągły odbiór
-          - hydraulic_capacity+1000  – chwilowe przeciążenie możliwe do zmagazynowania
-          - > hydraulic_capacity+1000 – awaria układu
+        Logika pracy oczyszczalni:
+
+        1. Do oczyszczalni trafia dopływ z sieci + opcjonalny składnik zależny od opadu.
+        2. Jeżeli dopływ przekracza przepustowość nominalną, nadmiar jest najpierw
+           odkładany do zbiornika retencyjnego (do limitu retention_capacity).
+        3. Jeżeli w danej godzinie oczyszczalnia ma wolną moc przerobową w zakresie
+           nominalnym, może dodatkowo opróżniać retencję z ograniczeniem
+           retention_release_rate.
+        4. Jeśli po uwzględnieniu retencji dopływ do oczyszczania nadal przekracza
+           przepustowość nominalną, oczyszczalnia przechodzi w tryb przyspieszony
+           aż do accelerated_capacity.
+        5. Dopiero jeśli:
+             - retencja jest już niewystarczająca / zapełniona,
+             - oczyszczalnia pracuje z maksymalną wydajnością przyspieszoną,
+           to nadmiar może zostać skierowany awaryjnie do KP26.
+        6. Wartości logowane w każdej godzinie powinny rozróżniać:
+             - dopływ do oczyszczalni,
+             - ilość oczyszczoną,
+             - ilość odłożoną do retencji,
+             - ilość pobraną z retencji,
+             - ilość skierowaną awaryjnie do KP26.
 
         Sterowanie KP26 odbywa się przez:
           - self.model.kp26_split_factor   (jaką część przepływu KP16/KP25 można wysłać na KP26)
           - self.model.overflow_point.active (czy w ogóle wolno kierować na przelew)
         """
         rain_depth = getattr(self.model, "current_rain_depth", 0.0)
-        total_in = self.inflow_from_graph + self.k_rain_depth * rain_depth
+        inflow = self.inflow_from_graph + self.k_rain_depth * rain_depth
 
-        # Progi z modelu
-        nominal = getattr(self.model, "nominal_capacity", self.max_capacity)
-        warning = getattr(self.model, "warning_threshold", nominal)
-        hydraulic = getattr(self.model, "hydraulic_capacity", warning)
-        retention_limit = hydraulic + 1000
-
-        # Domyślnie na początku każdej godziny brak odciążania na KP26
-        self.model.kp26_split_factor = 0.0
         self.model.overflow_point.active = False
 
-        # 1) NORMAL – wszystko poniżej nominalnej przepustowości
-        if total_in <= nominal:
-            self.estimated_flow = total_in
-            print(f"OCZ: OK ({total_in:.2f} m3/h)")
-            return
+        self.total_inflow_this_hour = inflow
 
-        # 2) WARNING – przeciążenie, ale jeszcze bez przelewu (tylko informacja)
-        if total_in <= warning:
-            self.estimated_flow = total_in
-            overload = total_in - nominal       # ile ponad „komfortową” pracę (tutaj oczyszcalnia jest zmuszona do pracy w trybie przyspieszonym)
-            print(
-                f"OCZ: PRZECIĄŻENIE (bez przelewu): "
-                f"in={total_in:.2f}, overload={overload:.2f}"
-            )
-            return
+        # =========================
+        # 1. RETENCJA – magazynowanie nadmiaru
+        # =========================
 
-        # 3) CRITICAL – zaczynamy otwierać KP26 stopniowo
-        if total_in <= hydraulic:
-            self.estimated_flow = total_in
-            overload = total_in - nominal
+        # excess = max(0.0, inflow - self.nominal_capacity)
+        excess = max(0.0, inflow - self.accelerated_capacity)
+        free_retention = max(0.0, self.retention_capacity - self.retention_volume)
 
-            if hydraulic > warning:
-                frac = (total_in - warning) / (hydraulic - warning)
-            else:
-                frac = 1.0
-            frac = max(0.0, min(frac, 1.0))
+        retained = min(excess, free_retention)
+        self.retention_volume += retained
+        self.retained_this_hour = retained
 
-            self.model.kp26_split_factor = frac
-            self.model.overflow_point.active = True
+        # to co trafia bezpośrednio do oczyszczenia
+        to_treat = inflow - retained
 
-            print(
-                f"OCZ: KRYTYCZNE ({total_in:.2f} m3/h) – otwieranie KP26, "
-                f"split={frac:.2f}, overload={overload:.2f}"
-            )
-            return
+        # =========================
+        # 2. OPRÓŻNIANIE RETENCJI gdy jest zapas mocy
+        # =========================
 
-        # 4) FAILURE_SOFT – powyżej hydraulicznego, ale w granicach retencji
-        if total_in <= retention_limit:
-            self.estimated_flow = hydraulic
-            overload = total_in - nominal
+        # spare_capacity = max(0.0, self.nominal_capacity - to_treat)
+        spare_capacity = max(0.0, self.accelerated_capacity - to_treat)
 
-            self.model.kp26_split_factor = 1.0
-            self.model.overflow_point.active = True
-
-            print(
-                f"OCZ: PRZECIĄŻENIE CHWILOWE ({total_in:.2f} m3/h) – "
-                f"odbiór max={hydraulic}, reszta do retencji"
-            )
-            return
-
-        # 5) FAILURE_HARD – powyżej retencji – awaria
-        self.estimated_flow = hydraulic
-        overload = total_in - nominal
-
-        self.model.kp26_split_factor = 1.0
-        self.model.overflow_point.active = True
-
-        print(
-            f"OCZ: AWARIA OCZYSZCZALNI! in={total_in:.2f} m3/h > {retention_limit} "
-            f"→ pełne otwarcie KP26, brak możliwości oczyszcaenia ani zmagazynowania całości ścieków"
+        released = min(
+            self.retention_volume,
+            self.retention_release_rate,
+            spare_capacity
         )
+
+        self.retention_volume -= released
+        self.released_from_retention = released
+
+        to_treat += released
+
+        # =========================
+        # 3. OCZYSZCZANIE
+        # =========================
+
+        if to_treat <= self.nominal_capacity:
+            self.estimated_flow = to_treat
+            self.treated_this_hour = to_treat
+            self.accelerated_hours_streak = 0
+            self.status = "NORMAL"
+
+            print("\n--- OCZYSZCZALNIA ---")
+            print(f"Dopływ całkowity: {inflow:.2f} m3/h")
+
+            print(f"Retencja aktualna: {self.retention_volume:.2f} / {self.retention_capacity} m3")
+            print(f"Do retencji w tej godzinie: {self.retained_this_hour:.2f} m3")
+            print(f"Z retencji uwolniono: {self.released_from_retention:.2f} m3")
+
+            print(f"Do oczyszczenia: {to_treat:.2f} m3/h")
+            print(f"Oczyszczono: {self.treated_this_hour:.2f} m3/h")
+
+            print(f"Tryb pracy: {self.status}")
+            print(f"Godzin pracy w trybie przyspieszonym: {self.accelerated_hours_streak}")
+
+            if self.model.overflow_point.active:
+                print("PRZELEW KP26: AKTYWNY")
+                print(f"Split KP26: {self.model.kp26_split_factor:.2f}")
+            else:
+                print("PRZELEW KP26: zamknięty")
+
+            if self.warning_code:
+                print(f"OSTRZEŻENIE: {self.warning_code}")
+
+            print("----------------------\n")
+
+            return
+
+        # =========================
+        # 4. TRYB PRZYSPIESZONY
+        # =========================
+
+        if to_treat <= self.accelerated_capacity:
+
+            self.estimated_flow = to_treat
+            self.accelerated_hours_streak += 1
+            self.status = "ACCELERATED"
+
+            if self.accelerated_hours_streak >= self.max_accelerated_hours:
+                self.warning_code = "ENV_ACCEL_TOO_LONG"
+
+            print("\n--- OCZYSZCZALNIA ---")
+            print(f"Dopływ całkowity: {inflow:.2f} m3/h")
+
+            print(f"Retencja aktualna: {self.retention_volume:.2f} / {self.retention_capacity} m3")
+            print(f"Do retencji w tej godzinie: {self.retained_this_hour:.2f} m3")
+            print(f"Z retencji uwolniono: {self.released_from_retention:.2f} m3")
+
+            print(f"Do oczyszczenia: {to_treat:.2f} m3/h")
+            print(f"Oczyszczono: {self.treated_this_hour:.2f} m3/h")
+
+            print(f"Tryb pracy: {self.status}")
+            print(f"Godzin pracy w trybie przyspieszonym: {self.accelerated_hours_streak}")
+
+            if self.model.overflow_point.active:
+                print("PRZELEW KP26: AKTYWNY")
+                print(f"Split KP26: {self.model.kp26_split_factor:.2f}")
+            else:
+                print("PRZELEW KP26: zamknięty")
+
+            if self.warning_code:
+                print(f"OSTRZEŻENIE: {self.warning_code}")
+
+            print("----------------------\n")
+
+            return
+
+        # =========================
+        # 5. NADMIAR → PRZELEW
+        # =========================
+
+        self.estimated_flow = self.accelerated_capacity
+        self.treated_this_hour = self.accelerated_capacity
+        self.accelerated_hours_streak += 1
+
+        excess_after_treatment = to_treat - self.accelerated_capacity
+
+        if excess_after_treatment > 0:
+            kp16_agent = self.model.sensors.get("KP16")
+            kp25_agent = self.model.sensors.get("KP25")
+
+            kp16_available = kp16_agent.current_flow * kp16_agent.pipe_loss if kp16_agent else 0.0
+            kp25_available = kp25_agent.current_flow * kp25_agent.pipe_loss if kp25_agent else 0.0
+            available_for_diversion = kp16_available + kp25_available
+
+            self.model.overflow_point.active = True
+
+            if available_for_diversion > 0:
+                split = excess_after_treatment / available_for_diversion
+                self.model.kp26_split_factor = max(0.0, min(split, 1.0))
+            else:
+                self.model.kp26_split_factor = 0.0
+
+            self.status = "EMERGENCY_OVERFLOW"
+        else:
+            self.model.kp26_split_factor = 0.0
+
+        if self.accelerated_hours_streak >= self.max_accelerated_hours:
+            self.warning_code = "ENV_ACCEL_TOO_LONG"
+
+        print("\n--- OCZYSZCZALNIA ---")
+        print(f"Dopływ całkowity: {inflow:.2f} m3/h")
+
+        print(f"Retencja aktualna: {self.retention_volume:.2f} / {self.retention_capacity} m3")
+        print(f"Do retencji w tej godzinie: {self.retained_this_hour:.2f} m3")
+        print(f"Z retencji uwolniono: {self.released_from_retention:.2f} m3")
+
+        print(f"Do oczyszczenia: {to_treat:.2f} m3/h")
+        print(f"Oczyszczono: {self.treated_this_hour:.2f} m3/h")
+
+        print(f"Tryb pracy: {self.status}")
+        print(f"Godzin pracy w trybie przyspieszonym: {self.accelerated_hours_streak}")
+
+        if self.model.overflow_point.active:
+            print("PRZELEW KP26: AKTYWNY")
+            print(f"Split KP26: {self.model.kp26_split_factor:.2f}")
+        else:
+            print("PRZELEW KP26: zamknięty")
+
+        if self.warning_code:
+            print(f"OSTRZEŻENIE: {self.warning_code}")
+
+        print("----------------------\n")
