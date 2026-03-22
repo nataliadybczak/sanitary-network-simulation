@@ -5,7 +5,6 @@ import math
 import pandas as pd
 import os
 
-# Pomocnicze: obliczanie dystansu (chociaż chyba nie będzie potrzebne)
 def _calculate_distance(loc1, loc2):
     lat1, lon1 = loc1
     lat2, lon2 = loc2
@@ -14,24 +13,24 @@ def _calculate_distance(loc1, loc2):
 
 # MODEL SYSTEMU KANALIZACYJNEGO
 class SewerSystemModel(Model):
-    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168, rain_file="data/rain.csv"):
+    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168, rain_file="data/rain.csv", start_month=1,):
 
         #graf przepływomierzy
         default_graph = {
-            "KP1": ["Oczyszczalnia"],
-            "KP2": ["Oczyszczalnia"],
-            "KP4": ["Oczyszczalnia"],
-            "KP6": ["Oczyszczalnia"],
+            "KP1": ["M1"],
+            "KP2": ["M1"],
+            "KP4": ["M1"],
+            "KP6": ["M1"],
             "KP7": ["KP16"],
-            "KP8": ["Oczyszczalnia"],
+            "KP8": ["M1"],
             "KP9": ["KP8"],
             "KP10": ["KP8"],
-            "KP11": ["Oczyszczalnia"],
+            "KP11": ["M1"],
             "KP16": ["KP2", "KP26"],
             "KP25": ["KP2", "KP26"],
-            "G-T1": ["Oczyszczalnia"],
+            "G-T1": ["M1"],
             "ŁPA-P1": ["KP8"],
-            "LBT1": ["Oczyszczalnia"],
+            "LBT1": ["M1"],
             "M1": ["Oczyszczalnia"],
             }
         import os
@@ -59,35 +58,68 @@ class SewerSystemModel(Model):
         else:
             df_area = None
 
+        self.current_hour = 1
+        self.current_month = start_month
+        self.running = True
+
         #Wczytujemy średnie przepływy dla każdej godziny dla każdego przepływomierza z pliku srednie_godzinowe.csv
         if mean_flows is None:
             import pandas as pd, os
-            file_path = os.path.join("data", "srednie_godzinowe.csv")
+            file_path = os.path.join("data", "mean_flows.csv")
             df_h = pd.read_csv(file_path)
 
             # Normalizacja kolumny Godzina
-            if pd.api.types.is_datetime64_any_dtype(df_h.get("Godzina", pd.Series([]))):
-                df_h["Godzina"] = pd.to_datetime(df_h["Godzina"]).dt.hour
-            else:
-                df_h["Godzina"] = pd.to_numeric(df_h["Godzina"], errors="coerce").astype("Int64")
+            # if pd.api.types.is_datetime64_any_dtype(df_h.get("Godzina", pd.Series([]))):
+            #     df_h["Godzina"] = pd.to_datetime(df_h["Godzina"]).dt.hour
+            # else:
+            #     df_h["Godzina"] = pd.to_numeric(df_h["Godzina"], errors="coerce").astype("Int64")
 
             # całość tabeli średnich godzinowych (używana w każdym kroku)
+
+            df_h.columns = df_h.columns.str.strip()
+            df_h["month"] = pd.to_numeric(df_h["month"], errors="coerce").astype("Int64")
+            df_h["hour"] = pd.to_numeric(df_h["hour"], errors="coerce").astype("Int64")
+
             self.hourly_means_df = df_h
 
             # Ustawienie mean_flows na startową godzinę symulacji
             # self.current_hour zaczyna się od 1 (czyli godzina pod względem doby to (1-1)%24 = 0)
-            start_hour = (getattr(self, "current_hour", 1) - 1) % 24
-            row = df_h.loc[df_h["Godzina"] == start_hour]
+            # start_hour = (getattr(self, "current_hour", 1) - 1) % 24
+            # row = df_h.loc[df_h["Godzina"] == start_hour]
+            start_hour = (self.current_hour - 1) % 24
+            row = df_h.loc[
+                (df_h["month"] == self.current_month) &
+                (df_h["hour"] == start_hour)
+                ]
             if row.empty:
-                # jeśli brakuje wiersza, to 0
-                row = df_h.loc[df_h["Godzina"] == 0]
-            # słownik {przepływomierz: średni przepływ}
-            mean_flows = row.drop(columns=["Godzina"]).iloc[0].to_dict()
+                row = df_h.loc[
+                    (df_h["month"] == self.current_month) &
+                    (df_h["hour"] == 0)
+                    ]
+            if row.empty:
+                raise ValueError(
+                    f"Brak base flow dla month={self.current_month}, hour={start_hour} "
+                    f"w pliku {file_path}"
+                )
+            mean_flows = row.drop(columns=["month", "hour"]).iloc[0].to_dict()
 
-            print(f"Wczytano średnie godzinowe z {file_path}. Startowa godzina={start_hour}.")
+            print(
+                f"Wczytano base flow z {file_path}. "
+                f"Startowy miesiąc={self.current_month}, godzina={start_hour}."
+            )
             print(f"Dostępne liczniki: {len(mean_flows)}")
         else:
             self.hourly_means_df = None
+            # if row.empty:
+            #     # jeśli brakuje wiersza, to 0
+            #     row = df_h.loc[df_h["Godzina"] == 0]
+            # słownik {przepływomierz: średni przepływ}
+        #     mean_flows = row.drop(columns=["Godzina"]).iloc[0].to_dict()
+        #
+        #     print(f"Wczytano średnie godzinowe z {file_path}. Startowa godzina={start_hour}.")
+        #     print(f"Dostępne liczniki: {len(mean_flows)}")
+        # else:
+        #     self.hourly_means_df = None
 
         self.mean_flows = mean_flows
 
@@ -99,8 +131,8 @@ class SewerSystemModel(Model):
         self.hydraulic_capacity = 2200  # maks. hydrauliczny odbiór
         self.warning_threshold = 2000  # po tym zaczynamy wykorzystywać przelew KP26
 
-        self.current_hour = 1
-        self.running = True
+        self.required_emergency_diversion = 0.0
+        self.diversion_candidates = {"KP16": 0.0, "KP25": 0.0}
 
         # Intensywność deszczu
         file_path = os.path.join(rain_file[0:rain_file.rfind("/")],rain_file[rain_file.rfind("/")+1:])
@@ -201,15 +233,38 @@ class SewerSystemModel(Model):
             dfs(node)
         return order[::-1]  # od najdalszego do najbliższego oczyszczalni
 
+    # def _select_means_for_hour(self, hour_0_23: int) -> dict:
+    #     if getattr(self, "hourly_means_df", None) is None:
+    #         return self.mean_flows
+    #     df_h = self.hourly_means_df
+    #     row = df_h.loc[df_h["Godzina"] == int(hour_0_23)]
+    #     if row.empty:
+    #         # fallback na 0, jeśli brakuje
+    #         row = df_h.loc[df_h["Godzina"] == 0]
+    #     return row.drop(columns=["Godzina"]).iloc[0].to_dict()
     def _select_means_for_hour(self, hour_0_23: int) -> dict:
         if getattr(self, "hourly_means_df", None) is None:
             return self.mean_flows
+
         df_h = self.hourly_means_df
-        row = df_h.loc[df_h["Godzina"] == int(hour_0_23)]
+
+        row = df_h.loc[
+            (df_h["month"] == self.current_month) &
+            (df_h["hour"] == int(hour_0_23))
+            ]
+
         if row.empty:
-            # fallback na 0, jeśli brakuje
-            row = df_h.loc[df_h["Godzina"] == 0]
-        return row.drop(columns=["Godzina"]).iloc[0].to_dict()
+            row = df_h.loc[
+                (df_h["month"] == self.current_month) &
+                (df_h["hour"] == 0)
+                ]
+
+        if row.empty:
+            raise ValueError(
+                f"Brak danych base flow dla month={self.current_month}, hour={hour_0_23}"
+            )
+
+        return row.drop(columns=["month", "hour"]).iloc[0].to_dict()
 
     # do aktualizacji godziny i przepływów dla danej godziny
     def refresh_mean_flows_for_current_hour(self):
@@ -225,7 +280,7 @@ class SewerSystemModel(Model):
         for sid, agent in self.sensors.items():
             upstream_ids = self.upstreams.get(sid, [])
             mean_up = sum(
-                self.mean_flows[u] for u in upstream_ids
+                float(self.mean_flows[u]) for u in upstream_ids
                 if u in self.mean_flows
             )
             agent.local_mean_flow = max(agent.mean_flow - mean_up, 0.0)
@@ -241,6 +296,7 @@ class SewerSystemModel(Model):
             sensor.reset_buffers()
         self.plant.reset_buffers()
         self.overflow_point.reset_buffers()
+        self.kp26_split_factor = 0.0
 
         self.refresh_mean_flows_for_current_hour()
 
@@ -278,11 +334,11 @@ class SewerSystemModel(Model):
             total_in = self.plant.inflow_from_graph
             remaining = max(0.0, total_in - self.nominal_capacity - diverted)
 
-            print(f"OCZ → podsumowanie:")
-            print(f"  dopływ całkowity: {total_in:.2f}")
-            print(f"  nominal: {self.nominal_capacity}")
-            print(f"  przelew KP26: {diverted:.2f} m3/h")
-            print(f"  nadmiar NIEWYŁADOWANY: {remaining:.2f} m3/h")
+            # print(f"OCZ → podsumowanie:")
+            # print(f"  dopływ całkowity: {total_in:.2f}")
+            # print(f"  nominal: {self.nominal_capacity}")
+            # print(f"  przelew KP26: {diverted:.2f} m3/h")
+            # print(f"  nadmiar NIEWYŁADOWANY: {remaining:.2f} m3/h")
 
         # --- 5. Zebranie danych ---
         self.datacollector.collect(self)
@@ -291,3 +347,14 @@ class SewerSystemModel(Model):
         self.current_hour += 1
         if self.current_hour > self.max_hours:
             self.running = False
+
+        print("\n=== PODSUMOWANIE GODZINY ===")
+
+        print(f"Dopływ do oczyszczalni: {self.plant.inflow_from_graph:.2f} m3/h")
+        print(f"Oczyszczono: {self.plant.treated_this_hour:.2f} m3/h")
+        print(f"W retencji: {self.plant.retention_volume:.2f} m3")
+
+        print(f"Przelew KP26 aktywny: {self.overflow_point.active}")
+        print(f"Do rzeki: {self.overflow_point.diverted_flow:.2f} m3/h")
+
+        print("============================\n")
