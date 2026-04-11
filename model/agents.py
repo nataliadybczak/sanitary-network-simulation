@@ -1,4 +1,5 @@
 from mesa import Agent
+import random
 
 # === PUNKT POMIAROWY (węzeł grafu) ===
 class BaseSensorAgent(Agent):
@@ -22,10 +23,15 @@ class BaseSensorAgent(Agent):
         self.mean_flow = mean_flow #średni przepływ bazowy (tzw. bazowy przepływ suchy)
         self.k_sensor = k_sensor #współczynnik wpływu deszczu
         self.alpha = alpha # wykładnik nieliniowości
+        # --- lokalna kalibracja ---
+        self.k_local = 1.0
+        self.alpha_local = 1.0
+
         self.impervious_factor = impervious_factor # udział powierzchni nieprzepuszczalnych
         self.local_mean_flow = 0.0 # średni przepływ bez uwzględniania dopływów
         self.storage = 0.0
-        self.rain_buffer = [0.0]
+        # self.rain_buffer = [0.0]
+        self.rain_buffer = [0.0] * 3
 
         # graf
         self.downstream_ids = downstream_ids or [] # sąsiedzi
@@ -37,6 +43,9 @@ class BaseSensorAgent(Agent):
         self.local_flow = 0.0            # przepływ wygenerowany lokalnie (baza + deszcz)
         self.current_flow = 0.0          # całkowity przepływ tego węzła (local + inflow)
         self.status = "NORMAL"           # status
+
+        self.noise_state = 0.0
+        self.gamma = 0.03
 
     # --- pomocnicze / wejściowe ---
     def reset_buffers(self):
@@ -69,20 +78,45 @@ class BaseSensorAgent(Agent):
 
         # bufor 1-godzinny dla spływu powierzchniowego
         self.rain_buffer.append(rain_I_now)
-        rain_I = self.rain_buffer.pop(0)  # i(t-1) – używane w Q_rain
+        # rain_I = self.rain_buffer.pop(0)  # i(t-1) – używane w Q_rain
+
+        rain_eff = (
+                0.6 * self.rain_buffer[-1] +
+                0.3 * self.rain_buffer[-2] +
+                0.1 * self.rain_buffer[-3]
+        )
+        self.rain_buffer.pop(0)
 
         # --- 2. Suchy przepływ + infiltracja ---
         # Q_base = Q_dry + gamma * D
-        gamma = 0.015 #ewentualnie możemy jeszcze dokalibrować
+        # gamma = 0.015 #ewentualnie możemy jeszcze dokalibrować
+        gamma = self.gamma
         self.storage = 0.9 * self.storage + D
         Q_base = self.local_mean_flow + gamma * self.storage
 
         # --- 3. Natychmiastowy spływ deszczowy (Rational/SWMM hybrid) ---
         # Q_rain = k * i^alpha * f_imp * area
-        Q_rain = self.k_sensor * (rain_I ** self.alpha) * self.impervious_factor * self.area
+        # Q_rain = self.k_sensor * (rain_I ** self.alpha) * self.impervious_factor * self.area
+        # Q_rain = self.k_sensor * (rain_eff ** self.alpha) * self.impervious_factor * self.area
+        if rain_eff < 1.0:
+            Q_rain = (
+                    self.k_sensor * self.k_local *
+                    rain_eff * 0.8 *  # liniowy wpływ (można skalibrować)
+                    self.impervious_factor * self.area
+            )
+        else:
+            Q_rain = (
+                    self.k_sensor * self.k_local *
+                    (rain_eff ** (self.alpha * self.alpha_local)) *
+                    self.impervious_factor * self.area
+            )
 
         # --- 4. Lokalny przepływ ---
-        self.local_flow = max(0.0, Q_base + Q_rain)
+        # self.local_flow = max(0.0, Q_base + Q_rain)
+        # noise = random.gauss(0, 0.1 * Q_base)  # 10% odchylenia
+        self.noise_state = 0.8 * self.noise_state + random.gauss(0, 0.05 * Q_base)
+        noise = self.noise_state
+        self.local_flow = max(0.0, Q_base + Q_rain + noise)
 
         # --- 5. Rzeczywisty przepływ (z uwzględnieniem dopływów)
         self.current_flow = self.local_flow + self.inflow_from_upstream
@@ -92,12 +126,13 @@ class BaseSensorAgent(Agent):
             self.status = "ALERT"
         else:
             self.status = "NORMAL"
-
+####################################################################################
         print(
-            f"[{self.location_id}] Rain_now={rain_I_now:.2f} mm/h, Rain_eff={rain_I:.2f} mm/h, D={D:.2f} mm | "
+            f"[{self.location_id}] Rain_now={rain_I_now:.2f} mm/h, Rain_eff={rain_eff:.2f} mm/h, D={D:.2f} mm | "
             f"Q_base={Q_base:.2f}, Q_rain={Q_rain:.2f}, "
             f"Q_inflow={self.inflow_from_upstream:.2f} → Q_tot={self.current_flow:.2f}"
         )
+###########################################################################################
 
     # --- routing po grafie ---
     def route(self):
@@ -147,6 +182,19 @@ class BaseSensorAgent(Agent):
 
     def advance(self):
         pass
+
+    def set_params(self, k=None, alpha=None, gamma=None, k_local=None, alpha_local=None):
+        if k is not None:
+            self.k_sensor = k
+        if alpha is not None:
+            self.alpha = alpha
+        if gamma is not None:
+            self.gamma = gamma
+        if k_local is not None:
+            self.k_local = k_local
+        if alpha_local is not None:
+            self.alpha_local = alpha_local
+
 
 # === PRZELEW (KP26) ===
 class OverflowPointAgent(Agent):
@@ -340,7 +388,7 @@ class SewagePlantAgent(Agent):
             self.treated_this_hour = to_treat
             self.accelerated_hours_streak = 0
             self.status = "NORMAL"
-
+####################################################################
             print("\n--- OCZYSZCZALNIA ---")
             print(f"Dopływ całkowity: {inflow:.2f} m3/h")
 
@@ -364,7 +412,7 @@ class SewagePlantAgent(Agent):
                 print(f"OSTRZEŻENIE: {self.warning_code}")
 
             print("----------------------\n")
-
+#############################################################
             return
 
         # =========================
@@ -374,12 +422,13 @@ class SewagePlantAgent(Agent):
         if to_treat <= self.accelerated_capacity:
 
             self.estimated_flow = to_treat
+            self.treated_this_hour = to_treat
             self.accelerated_hours_streak += 1
             self.status = "ACCELERATED"
 
             if self.accelerated_hours_streak >= self.max_accelerated_hours:
                 self.warning_code = "ENV_ACCEL_TOO_LONG"
-
+#####################################################################################################
             print("\n--- OCZYSZCZALNIA ---")
             print(f"Dopływ całkowity: {inflow:.2f} m3/h")
 
@@ -403,7 +452,7 @@ class SewagePlantAgent(Agent):
                 print(f"OSTRZEŻENIE: {self.warning_code}")
 
             print("----------------------\n")
-
+#########################################################################################################
             return
 
         # =========================
@@ -438,7 +487,7 @@ class SewagePlantAgent(Agent):
 
         if self.accelerated_hours_streak >= self.max_accelerated_hours:
             self.warning_code = "ENV_ACCEL_TOO_LONG"
-
+########################################################################################################
         print("\n--- OCZYSZCZALNIA ---")
         print(f"Dopływ całkowity: {inflow:.2f} m3/h")
 
@@ -462,3 +511,4 @@ class SewagePlantAgent(Agent):
             print(f"OSTRZEŻENIE: {self.warning_code}")
 
         print("----------------------\n")
+###################################################################################

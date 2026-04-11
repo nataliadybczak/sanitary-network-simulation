@@ -13,7 +13,7 @@ def _calculate_distance(loc1, loc2):
 
 # MODEL SYSTEMU KANALIZACYJNEGO
 class SewerSystemModel(Model):
-    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168, rain_file="data/rain.csv", start_month=1,):
+    def __init__(self, graph=None, mean_flows=None, max_capacity=1700, max_hours=168, rain_file="data/rain_clean.csv", start_month=1, debug=True):
 
         #graf przepływomierzy
         default_graph = {
@@ -61,6 +61,10 @@ class SewerSystemModel(Model):
         self.current_hour = 1
         self.current_month = start_month
         self.running = True
+
+        self.real_flow_df = None
+        self.validation_results = []
+        self.debug = debug
 
         #Wczytujemy średnie przepływy dla każdej godziny dla każdego przepływomierza z pliku srednie_godzinowe.csv
         if mean_flows is None:
@@ -122,6 +126,7 @@ class SewerSystemModel(Model):
         #     self.hourly_means_df = None
 
         self.mean_flows = mean_flows
+        self.step_index = 0
 
         self.graph = graph or default_graph
         self.max_capacity = max_capacity
@@ -138,8 +143,11 @@ class SewerSystemModel(Model):
         file_path = os.path.join(rain_file[0:rain_file.rfind("/")],rain_file[rain_file.rfind("/")+1:])
         # file_path = os.path.join("data", "rain.csv") #standardowy plik csv - różne wartości opadów
         # file_path = os.path.join("data/rain_experiments", "realistic.csv") # eksperymenty - nazwa pliku do podmiany
+        # df_rain = pd.read_csv(file_path)
         df_rain = pd.read_csv(file_path)
-        self.rain_intensity_data = df_rain["rain_mm_h"].tolist()
+        df_rain["datetime"] = pd.to_datetime(df_rain["datetime"])
+        self.rain_df = df_rain
+        # self.rain_intensity_data = df_rain["rain_mm_h"].tolist()
 
         self.current_rain_intensity = 0.0
         self.current_rain_depth = 0.0
@@ -166,8 +174,8 @@ class SewerSystemModel(Model):
                 location=(lat, lon),
                 area=df_area.loc[sensor_id]["area_km2"] if df_area is not None and sensor_id in df_area.index else 3.0,
                 mean_flow=mean_flow,
-                k_sensor=0.8,
-                alpha=1.2,
+                k_sensor=0.6,
+                alpha=1.1,
                 impervious_factor=df_imp.loc[sensor_id]["impervious"] if df_imp is not None and sensor_id in df_imp.index else 0.5,
                 downstream_ids=downstreams,
                 pipe_loss=0.95
@@ -199,13 +207,34 @@ class SewerSystemModel(Model):
         def make_sensor_lambda(sensor_id):
             return lambda m: m.sensors[sensor_id].current_flow
 
+        # self.datacollector = DataCollector(
+        #     model_reporters={
+        #         "TotalFlow": lambda m: m.plant.estimated_flow,
+        #         "OverflowActive": lambda m: int(m.overflow_point.active),
+        #         **{f"{sid}_Flow": make_sensor_lambda(sid) for sid in self.sensors}
+        #     }
+        # )
         self.datacollector = DataCollector(
             model_reporters={
                 "TotalFlow": lambda m: m.plant.estimated_flow,
                 "OverflowActive": lambda m: int(m.overflow_point.active),
+
+                "Inflow": lambda m: m.plant.inflow_from_graph,
+                "Treated": lambda m: m.plant.treated_this_hour,
+                "Retained": lambda m: m.plant.retained_this_hour,
+                "Released": lambda m: m.plant.released_from_retention,
+                "RetentionVolume": lambda m: m.plant.retention_volume,
+                "PlantStatus": lambda m: m.plant.status,
+                "KP26_Split": lambda m: m.kp26_split_factor,
+
+                # przelew
+                "OverflowVolume": lambda m: m.overflow_point.diverted_flow,
+
+                # sensory
                 **{f"{sid}_Flow": make_sensor_lambda(sid) for sid in self.sensors}
             }
         )
+        print("M1 mean_flow:", mean_flows.get("M1"))
 
     # ===============================================
     # Pomocnicze metody
@@ -233,15 +262,60 @@ class SewerSystemModel(Model):
             dfs(node)
         return order[::-1]  # od najdalszego do najbliższego oczyszczalni
 
-    # def _select_means_for_hour(self, hour_0_23: int) -> dict:
-    #     if getattr(self, "hourly_means_df", None) is None:
-    #         return self.mean_flows
-    #     df_h = self.hourly_means_df
-    #     row = df_h.loc[df_h["Godzina"] == int(hour_0_23)]
+    def set_datetime(self, current_dt, rain_value):
+        self.current_datetime = current_dt
+        self.current_month = current_dt.month
+        self.current_hour = current_dt.hour
+        self.current_rain_intensity = rain_value
+
+
+    def load_real_flows(self, file_path):
+        df = pd.read_csv(file_path)
+        df["Czas"] = pd.to_datetime(df["Czas"])
+        self.real_flow_df = df.set_index("Czas")
+
+    def get_real_flow(self, sensor_id):
+        if self.real_flow_df is None:
+            return None
+
+        row = self.real_flow_df.loc[
+            self.real_flow_df.index == self.current_datetime
+            ]
+
+        if row.empty:
+            return None
+
+        row = row.iloc[0]
+
+        col_name = sensor_id
+
+        if col_name in row:
+            return row[col_name]
+
+        return None
+    # def get_real_flow(self, sensor_id):
+    #     if self.real_flow_df is None:
+    #         return None
+    #
+    #     print("\n--- DEBUG GET REAL FLOW ---")
+    #     print("MODEL TIME:", self.current_datetime)
+    #     print("INDEX SAMPLE:", self.real_flow_df.index[:3])
+    #
+    #     row = self.real_flow_df.loc[
+    #         self.real_flow_df.index == self.current_datetime
+    #         ]
+    #
+    #     print("ROW FOUND:", not row.empty)
+    #
     #     if row.empty:
-    #         # fallback na 0, jeśli brakuje
-    #         row = df_h.loc[df_h["Godzina"] == 0]
-    #     return row.drop(columns=["Godzina"]).iloc[0].to_dict()
+    #         return None
+    #
+    #     row = row.iloc[0]
+    #
+    #     print("AVAILABLE COLUMNS:", row.index.tolist())
+    #     print("TRYING SENSOR:", sensor_id)
+
+
     def _select_means_for_hour(self, hour_0_23: int) -> dict:
         if getattr(self, "hourly_means_df", None) is None:
             return self.mean_flows
@@ -268,7 +342,8 @@ class SewerSystemModel(Model):
 
     # do aktualizacji godziny i przepływów dla danej godziny
     def refresh_mean_flows_for_current_hour(self):
-        hour_0_23 = (self.current_hour - 1) % 24
+        # hour_0_23 = (self.current_hour - 1) % 24
+        hour_0_23 = self.current_hour
         self.mean_flows = self._select_means_for_hour(hour_0_23)
 
         # 1) Aktualizacja mean_flow na podstawie pliku srednie_godinowe.csv
@@ -289,8 +364,19 @@ class SewerSystemModel(Model):
     # Pojedynczy krok symulacji
     # ===============================================
     def step(self):
-        print(f"\n===== Godzina {self.current_hour} =====")
+        if self.step_index < len(self.rain_df):
+            row = self.rain_df.iloc[self.step_index]
 
+            current_dt = row["datetime"]
+            rain_value = row["rain_mm_h"]
+
+            self.set_datetime(current_dt, rain_value)
+        else:
+            self.running = False
+            return
+######################################
+        print(f"\n===== {self.current_datetime} =====")
+#######################################
         # --- 1. Reset buforów ---
         for sensor in self.sensors.values():
             sensor.reset_buffers()
@@ -301,24 +387,27 @@ class SewerSystemModel(Model):
         self.refresh_mean_flows_for_current_hour()
 
         # --- 2. Ustawiamy warunki pogodowe ---
-        if self.current_hour <= len(self.rain_intensity_data):
-            #pobieramy intensywność opadów w obecnej godzinie
-            self.current_rain_intensity = self.rain_intensity_data[self.current_hour - 1]
-            ''' Rain depth - podejście Kozłowskiego - suma z ostatnich N godzin '''
-            window = 6
-            idx = self.current_hour - 1
-            start = max(0, idx - window + 1)
-            D = sum(self.rain_intensity_data[start: idx + 1])
-            self.current_rain_depth = D
+        # intensywność opadu z aktualnego kroku
+        self.current_rain_intensity = rain_value
 
-            ''' Alternatywa - w ramach porównania - podejście modelu SWMM - rezerwuar nieliniowy '''
-            # lam = self.rain_memory_lambda #do kalibracji (w literaturze typowo 0.9-0.98)
-            # self.current_rain_depth = (
-            #     self.rain_memory_lambda * self.current_rain_depth + self.current_rain_intensity
-            # )
-        else:
-            self.current_rain_intensity = 0.0
-            self.current_rain_depth = 0.0
+        # rain depth (okno czasowe)
+        window = 6
+        idx = self.step_index
+        start = max(0, idx - window + 1)
+        D = self.rain_df.iloc[start:idx + 1]["rain_mm_h"].sum()
+        self.current_rain_depth = D
+        # if self.current_hour <= len(self.rain_intensity_data):
+        #     #pobieramy intensywność opadów w obecnej godzinie
+        #     self.current_rain_intensity = self.rain_intensity_data[self.current_hour - 1]
+        #     ''' Rain depth - podejście Kozłowskiego - suma z ostatnich N godzin '''
+        #     window = 6
+        #     idx = self.current_hour - 1
+        #     start = max(0, idx - window + 1)
+        #     D = self.rain_df.iloc[start:idx+1]["rain_mm_h"].sum()
+        #     self.current_rain_depth = D
+        # else:
+        #     self.current_rain_intensity = 0.0
+        #     self.current_rain_depth = 0.0
 
         # --- 3. Obliczenie przepływów w każdym sensorze (upstream → downstream) ---
         for sid in self.sensor_order:
@@ -344,10 +433,20 @@ class SewerSystemModel(Model):
         self.datacollector.collect(self)
 
         # --- 6. Aktualizacja godziny ---
-        self.current_hour += 1
-        if self.current_hour > self.max_hours:
-            self.running = False
-
+        # self.current_hour += 1
+        # if self.current_hour > self.max_hours:
+        #     self.running = False
+        # if self.current_hour - 1 < len(self.rain_df):
+        #     row = self.rain_df.iloc[self.current_hour - 1]
+        #
+        #     current_dt = row["datetime"]
+        #     rain_value = row["rain_mm_h"]
+        #
+        #     self.set_datetime(current_dt, rain_value)
+        # else:
+        #     self.running = False
+        #     return
+#############################################################################################
         print("\n=== PODSUMOWANIE GODZINY ===")
 
         print(f"Dopływ do oczyszczalni: {self.plant.inflow_from_graph:.2f} m3/h")
@@ -357,4 +456,34 @@ class SewerSystemModel(Model):
         print(f"Przelew KP26 aktywny: {self.overflow_point.active}")
         print(f"Do rzeki: {self.overflow_point.diverted_flow:.2f} m3/h")
 
+        if self.debug:
+            for sid, sensor in self.sensors.items():
+
+                if sid in ("M1"):
+                    continue
+
+                real = self.get_real_flow(sid)
+
+                if real is None or pd.isna(real):
+                    continue
+
+                model_val = sensor.current_flow
+                diff = model_val - real
+                perc = (diff / real * 100) if real != 0 else 0
+
+                self.validation_results.append({
+                    "datetime": self.current_datetime,
+                    "sensor": sid,
+                    "model": model_val,
+                    "real": real,
+                    "diff": diff,
+                    "perc_error": perc
+                })
+            print("\n--- DEBUG: porównanie model vs rzeczywistość ---")
+            print(f"{sid}: model={model_val:.2f}, real={real:.2f}, diff={diff:.2f} ({perc:.1f}%)")
+
+
+
         print("============================\n")
+#########################################################################################################
+        self.step_index += 1
